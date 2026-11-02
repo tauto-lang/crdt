@@ -1,0 +1,40 @@
+import "../src/KeyMap.taut"
+import "../src/Latest.taut"
+import "../src/Position.taut"
+import "../src/Semilattice.taut"
+import "../src/Sequence.taut"
+
+// Replica 0 types 1 and then 2 after it.
+def p1(): List(Nat × Nat × Nat) := Cons(#(1, #(0, 1)), Nil)
+
+def p2(): List(Nat × Nat × Nat) := Position::after(p1(), #(0, 2))
+
+def doc(): KeyMap(List(Nat × Nat × Nat), Option(Latest(Nat)) × Bool) :=
+Sequence::insert(Sequence::insert(keymap_empty(), p1(), 1), p2(), 2)
+
+// Two replicas insert between 1 and 2 at the same time; both inserts are
+// kept, between 1 and 2, in the same order on both replicas.
+def left(): KeyMap(List(Nat × Nat × Nat), Option(Latest(Nat)) × Bool) :=
+Sequence::insert(doc(), Position::between(p1(), p2(), #(0, 3)), 7)
+
+def right(): KeyMap(List(Nat × Nat × Nat), Option(Latest(Nat)) × Bool) :=
+Sequence::insert(doc(), Position::between(p1(), p2(), #(1, 1)), 8)
+
+theorem concurrent_inserts(): Sequence::read(
+  merge(left(), right())
+) = Cons(1, Cons(7, Cons(8, Cons(2, Nil)))) {
+  Refl
+}
+
+theorem concurrent_inserts_other_order(): Sequence::read(
+  merge(right(), left())
+) = Cons(1, Cons(7, Cons(8, Cons(2, Nil)))) {
+  Refl
+}
+
+// A delete on one replica and an insert on the other.
+theorem delete_and_insert(): Sequence::read(
+  merge(Sequence::delete(doc(), p1()), right())
+) = Cons(8, Cons(2, Nil)) {
+  Refl
+}

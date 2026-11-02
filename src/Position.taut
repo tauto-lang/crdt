@@ -1,0 +1,441 @@
+import std::Base
+import std::Map
+import std::MapLaws
+import std::Nat
+import std::prelude::Ord
+import std::Ord
+import "KeyMap.taut"
+
+// Positions in a sequence: lists of digits, ordered as lists (a prefix comes
+// first). A digit is a number with the dot (replica, counter) of the insert
+// that made it, so concurrent inserts never make the same position. Between
+// two positions `p` and `q` with `p` before `q` there is another
+// (`Position::between`), as long as the last digit's number of `q` is not zero,
+// which every position made here keeps.
+
+fn digit_num(h: Nat × Nat × Nat): Nat {
+  match h: Nat {
+    #(n, d) => n
+  }
+}
+
+module Position {
+  fn ok(q: List(Nat × Nat × Nat)): Prop {
+    match q: Prop {
+      Nil => False
+      Cons(h, t) => match t: Prop {
+        Nil => Nat::lt(Zero, digit_num(h)) = true
+        Cons(h2, t2) => Position::ok(t)
+      }
+    }
+  }
+
+  // The digit list `p` with `(1, d)` after it: just after `p`.
+  pub fn after(p: List(Nat × Nat × Nat), d: Nat × Nat): List(Nat × Nat × Nat) {
+    List::append(p, Cons(#(1, d), Nil))
+  }
+
+  // A position strictly before `q`.
+  fn below(q: List(Nat × Nat × Nat), d: Nat × Nat): List(Nat × Nat × Nat) {
+    match q: List(Nat × Nat × Nat) {
+      Nil => Cons(#(1, d), Nil)
+      Cons(h, t) => match t: List(Nat × Nat × Nat) {
+        Nil => Cons(#(Nat::pred(digit_num(h)), d), Cons(#(1, d), Nil))
+        Cons(h2, t2) => Cons(h, Position::below(t, d))
+      }
+    }
+  }
+
+  fn pick(
+    a: Nat × Nat × Nat,
+    pt: List(Nat × Nat × Nat),
+    qt: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    rest: (List(Nat × Nat × Nat)) -> List(Nat × Nat × Nat),
+    o: Ordering
+  ): List(Nat × Nat × Nat) {
+    match o: List(Nat × Nat × Nat) {
+      Less => Position::after(Cons(a, pt), d)
+      Equal => Cons(a, rest(qt))
+      Greater => Position::after(Cons(a, pt), d)
+    }
+  }
+
+  // A position strictly between `p` and `q`, made by the insert with dot `d`.
+  pub fn between(
+    p: List(Nat × Nat × Nat),
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat
+  ): List(Nat × Nat × Nat) {
+    match p: List(Nat × Nat × Nat) {
+      Nil => Position::below(q, d)
+      Cons(a, pt) => match q: List(Nat × Nat × Nat) {
+        Nil => Position::after(Cons(a, pt), d)
+        Cons(b, qt) => Position::pick(
+          a,
+          pt,
+          qt,
+          d,
+          (t: List(Nat × Nat × Nat)) => Position::between(pt, t, d),
+          Ord::compare(&a, &b)
+        )
+      }
+    }
+  }
+}
+
+theorem ord_then_less_left(o: Ordering, r: Ordering, h: o = Less): ord_then(o, r) = Less {
+  Eq::congr((x: Ordering) => ord_then(x, r), h)
+}
+
+theorem ord_then_equal_left(o: Ordering, r: Ordering, h: o = Equal): ord_then(o, r) = r {
+  Eq::congr((x: Ordering) => ord_then(x, r), h)
+}
+
+theorem digit_same(h: Nat × Nat × Nat): Ord::compare(h, h) = Equal {
+  ord_eq_equal(h, h, Refl)
+}
+
+module Position {
+  theorem ok_cons(
+    h: Nat × Nat × Nat,
+    x: List(Nat × Nat × Nat),
+    ok: Position::ok(x)
+  ): Position::ok(Cons(h, x)) {
+    match x: Position::ok(Cons(h, x)) {
+      Nil => False::elim(ok)
+      Cons(h2, t2) => ok
+    }
+  }
+
+  theorem after_gt(
+    p: List(Nat × Nat × Nat),
+    d: Nat × Nat
+  ): Ord::compare(p, Position::after(p, d)) = Less {
+    match p: Ord::compare(p, Position::after(p, d)) = Less {
+      Nil => Refl
+      Cons(a, r) => Eq::trans(
+        ord_then_equal_left(
+          Ord::compare(a, a),
+          Ord::compare(r, Position::after(r, d)),
+          digit_same(a)
+        ),
+        Position::after_gt(r, d)
+      )
+    }
+  }
+
+  theorem after_ok(p: List(Nat × Nat × Nat), d: Nat × Nat): Position::ok(Position::after(p, d)) {
+    match p: Position::ok(Position::after(p, d)) {
+      Nil => Refl
+      Cons(a, r) => Position::ok_cons(a, Position::after(r, d), Position::after_ok(r, d))
+    }
+  }
+}
+
+theorem nat_pred_lt(
+  n: Nat,
+  h: Nat::lt(Zero, n) = true
+): Ordmap::compare_nat(Nat::pred(n), n) = Less {
+  match n: Ordmap::compare_nat(Nat::pred(n), n) = Less {
+    Zero => False::elim(false_ne_true(h))
+    Succ(k) => Ordmap::select_of_true(Nat::lt(k, Succ(k)), Nat::lt(Succ(k), k), Nat::le_refl(k))
+  }
+}
+
+theorem digit_pred_lt(
+  h: Nat × Nat × Nat,
+  d: Nat × Nat,
+  ok: Nat::lt(Zero, digit_num(h)) = true
+): Ord::compare(#(Nat::pred(digit_num(h)), d), h) = Less {
+  match h: Ord::compare(#(Nat::pred(digit_num(h)), d), h) = Less {
+    #(n, e) => ord_then_less_left(
+      Ordmap::compare_nat(Nat::pred(n), n),
+      Ord::compare(d, e),
+      nat_pred_lt(n, ok)
+    )
+  }
+}
+
+module Position {
+  theorem below_gt(
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat
+  ): Ord::compare(Nil, Position::below(q, d)) = Less {
+    match q: Ord::compare(Nil, Position::below(q, d)) = Less {
+      Nil => Refl
+      Cons(h, t) => match t: Ord::compare(Nil, Position::below(Cons(h, t), d)) = Less {
+        Nil => Refl
+        Cons(h2, t2) => Refl
+      }
+    }
+  }
+
+  theorem below_lt_step(
+    h: Nat × Nat × Nat,
+    t: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    ok: Position::ok(Cons(h, t)),
+    ih: (Position::ok(t)) -> Ord::compare(Position::below(t, d), t) = Less
+  ): Ord::compare(Position::below(Cons(h, t), d), Cons(h, t)) = Less {
+    match t: Ord::compare(Position::below(Cons(h, t), d), Cons(h, t)) = Less {
+      Nil => ord_then_less_left(
+        Ord::compare(#(Nat::pred(digit_num(h)), d), h),
+        Ord::compare(Cons(#(1, d), Nil), Nil),
+        digit_pred_lt(h, d, ok)
+      )
+      Cons(h2, t2) => Eq::trans(
+        ord_then_equal_left(
+          Ord::compare(h, h),
+          Ord::compare(Position::below(Cons(h2, t2), d), Cons(h2, t2)),
+          digit_same(h)
+        ),
+        ih(ok)
+      )
+    }
+  }
+
+  theorem below_lt(
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    ok: Position::ok(q)
+  ): Ord::compare(Position::below(q, d), q) = Less {
+    match q: Ord::compare(Position::below(q, d), q) = Less {
+      Nil => False::elim(ok)
+      Cons(h, t) => Position::below_lt_step(
+        h,
+        t,
+        d,
+        ok,
+        (o2: Position::ok(t)) => Position::below_lt(t, d, o2)
+      )
+    }
+  }
+
+  theorem below_ok_step(
+    h: Nat × Nat × Nat,
+    t: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    ok: Position::ok(Cons(h, t)),
+    ih: (Position::ok(t)) -> Position::ok(Position::below(t, d))
+  ): Position::ok(Position::below(Cons(h, t), d)) {
+    match t: Position::ok(Position::below(Cons(h, t), d)) {
+      Nil => Refl
+      Cons(h2, t2) => Position::ok_cons(h, Position::below(Cons(h2, t2), d), ih(ok))
+    }
+  }
+
+  theorem below_ok(
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    ok: Position::ok(q)
+  ): Position::ok(Position::below(q, d)) {
+    match q: Position::ok(Position::below(q, d)) {
+      Nil => False::elim(ok)
+      Cons(h, t) => Position::below_ok_step(
+        h,
+        t,
+        d,
+        ok,
+        (o2: Position::ok(t)) => Position::below_ok(t, d, o2)
+      )
+    }
+  }
+
+  theorem not_lt_nil(p: List(Nat × Nat × Nat), h: Ord::compare(p, Nil) = Less): False {
+    match p: False {
+      Nil => equal_ne_less(h)
+      Cons(a, r) => greater_ne_less(h)
+    }
+  }
+
+  theorem ok_tail(
+    b: Nat × Nat × Nat,
+    qt: List(Nat × Nat × Nat),
+    ok: Position::ok(Cons(b, qt)),
+    pt: List(Nat × Nat × Nat),
+    h: Ord::compare(pt, qt) = Less
+  ): Position::ok(qt) {
+    match qt: Position::ok(qt) {
+      Nil => False::elim(Position::not_lt_nil(pt, h))
+      Cons(h2, t2) => ok
+    }
+  }
+}
+
+theorem ord_then_tail(o: Ordering, r: Ordering, ho: o = Equal, h: ord_then(o, r) = Less): r = Less {
+  Eq::trans(Eq::sym(ord_then_equal_left(o, r, ho)), h)
+}
+
+theorem ord_then_not_greater(
+  o: Ordering,
+  r: Ordering,
+  ho: o = Greater,
+  h: ord_then(o, r) = Less
+): False {
+  greater_ne_less(Eq::trans(Eq::sym(Eq::congr((x: Ordering) => ord_then(x, r), ho)), h))
+}
+
+module Position {
+  theorem between_gt(
+    p: List(Nat × Nat × Nat),
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    h: Ord::compare(p, q) = Less,
+    ok: Position::ok(q)
+  ): Ord::compare(p, Position::between(p, q, d)) = Less {
+    match p: Ord::compare(p, Position::between(p, q, d)) = Less {
+      Nil => Position::below_gt(q, d)
+      Cons(a, pt) => match q: Ord::compare(
+        Cons(a, pt),
+        Position::between(Cons(a, pt), q, d)
+      ) = Less {
+        Nil => False::elim(Position::not_lt_nil(Cons(a, pt), h))
+        Cons(b, qt) => Ordering::cases(
+          (o: Ordering) => Ord::compare(
+            Cons(a, pt),
+            Position::pick(
+              a,
+              pt,
+              qt,
+              d,
+              (t: List(Nat × Nat × Nat)) => Position::between(pt, t, d),
+              o
+            )
+          ) = Less,
+          Ord::compare(a, b),
+          (hab: Ord::compare(a, b) = Less) => Position::after_gt(Cons(a, pt), d),
+          (hab: Ord::compare(a, b) = Equal) => Eq::trans(
+            ord_then_equal_left(
+              Ord::compare(a, a),
+              Ord::compare(pt, Position::between(pt, qt, d)),
+              digit_same(a)
+            ),
+            Position::between_gt(
+              pt,
+              qt,
+              d,
+              ord_then_tail(Ord::compare(a, b), Ord::compare(pt, qt), hab, h),
+              Position::ok_tail(
+                b,
+                qt,
+                ok,
+                pt,
+                ord_then_tail(Ord::compare(a, b), Ord::compare(pt, qt), hab, h)
+              )
+            )
+          ),
+          (hab: Ord::compare(a, b) = Greater) => False::elim(
+            ord_then_not_greater(Ord::compare(a, b), Ord::compare(pt, qt), hab, h)
+          )
+        )
+      }
+    }
+  }
+
+  theorem between_lt(
+    p: List(Nat × Nat × Nat),
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    h: Ord::compare(p, q) = Less,
+    ok: Position::ok(q)
+  ): Ord::compare(Position::between(p, q, d), q) = Less {
+    match p: Ord::compare(Position::between(p, q, d), q) = Less {
+      Nil => Position::below_lt(q, d, ok)
+      Cons(a, pt) => match q: Ord::compare(Position::between(Cons(a, pt), q, d), q) = Less {
+        Nil => False::elim(Position::not_lt_nil(Cons(a, pt), h))
+        Cons(b, qt) => Ordering::cases(
+          (o: Ordering) => Ord::compare(
+            Position::pick(
+              a,
+              pt,
+              qt,
+              d,
+              (t: List(Nat × Nat × Nat)) => Position::between(pt, t, d),
+              o
+            ),
+            Cons(b, qt)
+          ) = Less,
+          Ord::compare(a, b),
+          (hab: Ord::compare(a, b) = Less) => ord_then_less_left(
+            Ord::compare(a, b),
+            Ord::compare(List::append(pt, Cons(#(1, d), Nil)), qt),
+            hab
+          ),
+          (hab: Ord::compare(a, b) = Equal) => Eq::trans(
+            ord_then_equal_left(
+              Ord::compare(a, b),
+              Ord::compare(Position::between(pt, qt, d), qt),
+              hab
+            ),
+            Position::between_lt(
+              pt,
+              qt,
+              d,
+              ord_then_tail(Ord::compare(a, b), Ord::compare(pt, qt), hab, h),
+              Position::ok_tail(
+                b,
+                qt,
+                ok,
+                pt,
+                ord_then_tail(Ord::compare(a, b), Ord::compare(pt, qt), hab, h)
+              )
+            )
+          ),
+          (hab: Ord::compare(a, b) = Greater) => False::elim(
+            ord_then_not_greater(Ord::compare(a, b), Ord::compare(pt, qt), hab, h)
+          )
+        )
+      }
+    }
+  }
+
+  theorem between_ok(
+    p: List(Nat × Nat × Nat),
+    q: List(Nat × Nat × Nat),
+    d: Nat × Nat,
+    h: Ord::compare(p, q) = Less,
+    ok: Position::ok(q)
+  ): Position::ok(Position::between(p, q, d)) {
+    match p: Position::ok(Position::between(p, q, d)) {
+      Nil => Position::below_ok(q, d, ok)
+      Cons(a, pt) => match q: Position::ok(Position::between(Cons(a, pt), q, d)) {
+        Nil => False::elim(Position::not_lt_nil(Cons(a, pt), h))
+        Cons(b, qt) => Ordering::cases(
+          (o: Ordering) => Position::ok(
+            Position::pick(
+              a,
+              pt,
+              qt,
+              d,
+              (t: List(Nat × Nat × Nat)) => Position::between(pt, t, d),
+              o
+            )
+          ),
+          Ord::compare(a, b),
+          (hab: Ord::compare(a, b) = Less) => Position::after_ok(Cons(a, pt), d),
+          (hab: Ord::compare(a, b) = Equal) => Position::ok_cons(
+            a,
+            Position::between(pt, qt, d),
+            Position::between_ok(
+              pt,
+              qt,
+              d,
+              ord_then_tail(Ord::compare(a, b), Ord::compare(pt, qt), hab, h),
+              Position::ok_tail(
+                b,
+                qt,
+                ok,
+                pt,
+                ord_then_tail(Ord::compare(a, b), Ord::compare(pt, qt), hab, h)
+              )
+            )
+          ),
+          (hab: Ord::compare(a, b) = Greater) => False::elim(
+            ord_then_not_greater(Ord::compare(a, b), Ord::compare(pt, qt), hab, h)
+          )
+        )
+      }
+    }
+  }
+}

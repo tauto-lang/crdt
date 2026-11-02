@@ -1,0 +1,145 @@
+import "Instances.taut"
+import "KeyMap.taut"
+import "Semilattice.taut"
+import std::Base
+import std::prelude::Ord
+import "KeyMapFind.taut"
+
+// Whether the element is there: a missing entry is `false`.
+fn bool_of(o: Option(Bool)): Bool {
+  match o: Bool {
+    None => false
+    Some(b) => b
+  }
+}
+
+pub theorem bool_or_true_right(a: Bool): Bool::or(a, true) = true {
+  match a: Bool::or(a, true) = true {
+    false => Refl
+    true => Refl
+  }
+}
+
+theorem bool_of_merge(
+  o1: Option(Bool),
+  o2: Option(Bool)
+): bool_of(merge(o1, o2)) = Bool::or(bool_of(o1), bool_of(o2)) {
+  match o1: bool_of(merge(o1, o2)) = Bool::or(bool_of(o1), bool_of(o2)) {
+    None => Refl
+    Some(b) => match o2: bool_of(merge(Some(b), o2)) = Bool::or(b, bool_of(o2)) {
+      None => Eq::sym(bool_or_false_right(b))
+      Some(c) => Refl
+    }
+  }
+}
+
+// A grow-only set: elements are added and never removed.
+pub fn gset_contains<K>(s: KeyMap(K, Bool), k: K): Bool where Ord(K) {
+  bool_of(KeyMap::get(s, k))
+}
+
+// Add `k`. The delta to send is `KeyMap::single(k, true)`.
+pub fn gset_add<K>(s: KeyMap(K, Bool), k: K): KeyMap(K, Bool) where Ord(K) {
+  KeyMap::put(s, k, true)
+}
+
+theorem gset_contains_merge<K>(
+  a: KeyMap(K, Bool),
+  b: KeyMap(K, Bool),
+  k: K
+): gset_contains(merge(a, b), k) = Bool::or(gset_contains(a, k), gset_contains(b, k)) where Ord(K) {
+  Eq::trans(
+    Eq::congr((o: Option(Bool)) => bool_of(o), KeyMap::get_merge(a, b, k)),
+    bool_of_merge(KeyMap::get(a, k), KeyMap::get(b, k))
+  )
+}
+
+theorem gset_contains_add<K>(
+  s: KeyMap(K, Bool),
+  k: K
+): gset_contains(gset_add(s, k), k) = true where Ord(K) {
+  Eq::trans(
+    Eq::congr((o: Option(Bool)) => bool_of(o), KeyMap::get_put(s, k, true)),
+    Eq::trans(
+      bool_of_merge(KeyMap::get(s, k), Some(true)),
+      bool_or_true_right(bool_of(KeyMap::get(s, k)))
+    )
+  )
+}
+
+theorem gset_contains_add_other<K>(
+  s: KeyMap(K, Bool),
+  k: K,
+  k2: K,
+  ne: (k = k2) -> False
+): gset_contains(gset_add(s, k), k2) = gset_contains(s, k2) where Ord(K) {
+  Eq::congr((o: Option(Bool)) => bool_of(o), KeyMap::get_put_other(s, k, true, k2, ne))
+}
+
+// A two-phase set: the added elements and the removed ones. A removed
+// element stays removed, whatever is merged later.
+pub fn twopset_contains<K>(s: KeyMap(K, Bool) × KeyMap(K, Bool), k: K): Bool where Ord(K) {
+  match s: Bool {
+    #(a, r) => Bool::and(gset_contains(a, k), not(gset_contains(r, k)))
+  }
+}
+
+pub fn twopset_add<K>(
+  s: KeyMap(K, Bool) × KeyMap(K, Bool),
+  k: K
+): KeyMap(K, Bool) × KeyMap(K, Bool) where Ord(K) {
+  match s: KeyMap(K, Bool) × KeyMap(K, Bool) {
+    #(a, r) => #(gset_add(a, k), r)
+  }
+}
+
+pub fn twopset_remove<K>(
+  s: KeyMap(K, Bool) × KeyMap(K, Bool),
+  k: K
+): KeyMap(K, Bool) × KeyMap(K, Bool) where Ord(K) {
+  match s: KeyMap(K, Bool) × KeyMap(K, Bool) {
+    #(a, r) => #(a, gset_add(r, k))
+  }
+}
+
+theorem twopset_removed_of<K>(
+  a: KeyMap(K, Bool),
+  r: KeyMap(K, Bool),
+  k: K,
+  h: gset_contains(r, k) = true
+): twopset_contains(#(a, r), k) = false where Ord(K) {
+  Eq::trans(
+    Eq::congr((b: Bool) => Bool::and(gset_contains(a, k), not(b)), h),
+    Bool::and_false_right(gset_contains(a, k))
+  )
+}
+
+// Once removed, an element is gone from every state the remove reaches.
+theorem twopset_remove_merge<K>(
+  s: KeyMap(K, Bool) × KeyMap(K, Bool),
+  t: KeyMap(K, Bool) × KeyMap(K, Bool),
+  k: K
+): twopset_contains(merge(twopset_remove(s, k), t), k) = false where Ord(K) {
+  match s: twopset_contains(merge(twopset_remove(s, k), t), k) = false {
+    #(a, r) => match t: twopset_contains(merge(twopset_remove(#(a, r), k), t), k) = false {
+      #(a2, r2) => twopset_removed_of(
+        merge(a, a2),
+        merge(gset_add(r, k), r2),
+        k,
+        Eq::trans(
+          gset_contains_merge(gset_add(r, k), r2, k),
+          Eq::congr((b: Bool) => Bool::or(b, gset_contains(r2, k)), gset_contains_add(r, k))
+        )
+      )
+    }
+  }
+}
+
+theorem twopset_contains_remove<K>(
+  s: KeyMap(K, Bool) × KeyMap(K, Bool),
+  k: K
+): twopset_contains(twopset_remove(s, k), k) = false where Ord(K) {
+  match s: twopset_contains(twopset_remove(s, k), k) = false {
+    #(a, r) => twopset_removed_of(a, gset_add(r, k), k, gset_contains_add(r, k))
+  }
+}

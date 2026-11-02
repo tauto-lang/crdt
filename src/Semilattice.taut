@@ -1,0 +1,283 @@
+import std::Base
+import std::Nat
+
+// A state-based CRDT is a join-semilattice: `merge` is commutative,
+// associative and idempotent. Replicas that have received the same states,
+// in any order and any number of times, end in the same state
+// (`deliver_perm`, `deliver_twice` below).
+pub class Semilattice(A: Type) {
+  fn merge(a: A, b: A): A
+  law comm<a: A, b: A>(): Semilattice::merge(a, b) = Semilattice::merge(b, a)
+  law assoc<a: A, b: A, c: A>(): Semilattice::merge(
+    Semilattice::merge(a, b),
+    c
+  ) = Semilattice::merge(a, Semilattice::merge(b, c))
+  law idem<a: A>(): Semilattice::merge(a, a) = a
+}
+
+// The merge of a semilattice, as a function.
+pub fn merge<A>(a: A, b: A): A where Semilattice(A) {
+  Semilattice::merge(a, b)
+}
+
+// The laws, with their arguments explicit.
+
+pub theorem merge_comm<A>(a: A, b: A): merge(a, b) = merge(b, a) where Semilattice(A) {
+  the(Semilattice::merge(a, b) = Semilattice::merge(b, a), Semilattice::comm())
+}
+
+pub theorem merge_assoc<A>(
+  a: A,
+  b: A,
+  c: A
+): merge(merge(a, b), c) = merge(a, merge(b, c)) where Semilattice(A) {
+  the(
+    Semilattice::merge(
+      Semilattice::merge(a, b),
+      c
+    ) = Semilattice::merge(a, Semilattice::merge(b, c)),
+    Semilattice::assoc()
+  )
+}
+
+pub theorem merge_idem<A>(a: A): merge(a, a) = a where Semilattice(A) {
+  the(Semilattice::merge(a, a) = a, Semilattice::idem())
+}
+
+// The last two merged in the other order.
+theorem merge_swap_right<A>(
+  a: A,
+  b: A,
+  c: A
+): merge(merge(a, b), c) = merge(merge(a, c), b) where Semilattice(A) {
+  Eq::trans(
+    merge_assoc(a, b, c),
+    Eq::trans(Eq::congr((x: A) => merge(a, x), merge_comm(b, c)), Eq::sym(merge_assoc(a, c, b)))
+  )
+}
+
+pub theorem merge_left_comm<A>(
+  a: A,
+  b: A,
+  c: A
+): merge(a, merge(b, c)) = merge(b, merge(a, c)) where Semilattice(A) {
+  Eq::trans(
+    Eq::sym(merge_assoc(a, b, c)),
+    Eq::trans(Eq::congr((x: A) => merge(x, c), merge_comm(a, b)), merge_assoc(b, a, c))
+  )
+}
+
+pub theorem merge_interchange<A>(
+  a: A,
+  b: A,
+  c: A,
+  d: A
+): merge(merge(a, b), merge(c, d)) = merge(merge(a, c), merge(b, d)) where Semilattice(A) {
+  Eq::trans(
+    merge_assoc(a, b, merge(c, d)),
+    Eq::trans(
+      Eq::congr((x: A) => merge(a, x), merge_left_comm(b, c, d)),
+      Eq::sym(merge_assoc(a, c, merge(b, d)))
+    )
+  )
+}
+
+// The order of the semilattice: `a` is below `b` when merging `a` into `b`
+// leaves `b`, that is, `b` has seen everything `a` has.
+pub fn below<A>(a: A, b: A): Prop where Semilattice(A) {
+  merge(a, b) = b
+}
+
+pub theorem below_refl<A>(a: A): below(a, a) where Semilattice(A) {
+  merge_idem(a)
+}
+
+pub theorem below_trans<A>(
+  a: A,
+  b: A,
+  c: A,
+  h1: below(a, b),
+  h2: below(b, c)
+): below(a, c) where Semilattice(A) {
+  Eq::trans(
+    Eq::congr((x: A) => merge(a, x), Eq::sym(h2)),
+    Eq::trans(Eq::sym(merge_assoc(a, b, c)), Eq::trans(Eq::congr((x: A) => merge(x, c), h1), h2))
+  )
+}
+
+pub theorem below_antisym<A>(
+  a: A,
+  b: A,
+  h1: below(a, b),
+  h2: below(b, a)
+): a = b where Semilattice(A) {
+  Eq::trans(Eq::sym(h2), Eq::trans(merge_comm(b, a), h1))
+}
+
+// The merge is an upper bound of both states...
+pub theorem below_merge_left<A>(a: A, b: A): below(a, merge(a, b)) where Semilattice(A) {
+  Eq::trans(Eq::sym(merge_assoc(a, a, b)), Eq::congr((x: A) => merge(x, b), merge_idem(a)))
+}
+
+pub theorem below_merge_right<A>(a: A, b: A): below(b, merge(a, b)) where Semilattice(A) {
+  Eq::trans(
+    Eq::congr((x: A) => merge(b, x), merge_comm(a, b)),
+    Eq::trans(below_merge_left(b, a), merge_comm(b, a))
+  )
+}
+
+// ...and the least one.
+pub theorem merge_least<A>(
+  a: A,
+  b: A,
+  c: A,
+  h1: below(a, c),
+  h2: below(b, c)
+): below(merge(a, b), c) where Semilattice(A) {
+  Eq::trans(merge_assoc(a, b, c), Eq::trans(Eq::congr((x: A) => merge(a, x), h2), h1))
+}
+
+// If `a` is below `b` and `c` is below `d`, then `merge(a, c)` is below `merge(b, d)`.
+pub theorem below_merge_both<A>(
+  a: A,
+  b: A,
+  c: A,
+  d: A,
+  h1: below(a, b),
+  h2: below(c, d)
+): below(merge(a, c), merge(b, d)) where Semilattice(A) {
+  Eq::trans(
+    merge_interchange(a, c, b, d),
+    Eq::trans(Eq::congr((x: A) => merge(x, merge(c, d)), h1), Eq::congr((x: A) => merge(b, x), h2))
+  )
+}
+
+// Merging is monotone: a replica that knows more still knows more after
+// both merge the same state.
+pub theorem merge_mono<A>(
+  a: A,
+  b: A,
+  c: A,
+  h: below(a, b)
+): below(merge(a, c), merge(b, c)) where Semilattice(A) {
+  merge_least(
+    a,
+    c,
+    merge(b, c),
+    below_trans(a, b, merge(b, c), h, below_merge_left(b, c)),
+    below_merge_right(b, c)
+  )
+}
+
+// Delivery: a replica in state `s` merges the received states in order.
+pub fn deliver<A>(xs: List(A), s: A): A where Semilattice(A) {
+  match xs: A {
+    Nil => s
+    Cons(x, rest) => deliver(rest, merge(s, x))
+  }
+}
+
+theorem deliver_merge<A>(
+  xs: List(A),
+  s: A,
+  y: A
+): deliver(xs, merge(s, y)) = merge(deliver(xs, s), y) where Semilattice(A) {
+  match xs: deliver(xs, merge(s, y)) = merge(deliver(xs, s), y) {
+    Nil => Refl
+    Cons(x, rest) => Eq::trans(
+      Eq::congr((t: A) => deliver(rest, t), merge_swap_right(s, y, x)),
+      deliver_merge(rest, merge(s, x), y)
+    )
+  }
+}
+
+pub theorem deliver_append<A>(
+  xs: List(A),
+  ys: List(A),
+  s: A
+): deliver(List::append(xs, ys), s) = deliver(ys, deliver(xs, s)) where Semilattice(A) {
+  match xs: deliver(List::append(xs, ys), s) = deliver(ys, deliver(xs, s)) {
+    Nil => Refl
+    Cons(x, rest) => deliver_append(rest, ys, merge(s, x))
+  }
+}
+
+// Two batches delivered in either order give the same state.
+pub theorem deliver_swap<A>(
+  ys: List(A),
+  xs: List(A),
+  s: A
+): deliver(ys, deliver(xs, s)) = deliver(xs, deliver(ys, s)) where Semilattice(A) {
+  match ys: deliver(ys, deliver(xs, s)) = deliver(xs, deliver(ys, s)) {
+    Nil => Refl
+    Cons(y, rest) => Eq::trans(
+      Eq::congr((t: A) => deliver(rest, t), Eq::sym(deliver_merge(xs, s, y))),
+      deliver_swap(rest, xs, merge(s, y))
+    )
+  }
+}
+
+// A batch delivered twice is as good as once.
+pub theorem deliver_twice<A>(
+  xs: List(A),
+  s: A
+): deliver(xs, deliver(xs, s)) = deliver(xs, s) where Semilattice(A) {
+  match xs: deliver(xs, deliver(xs, s)) = deliver(xs, s) {
+    Nil => Refl
+    Cons(x, rest) => Eq::trans(
+      Eq::congr(
+        (t: A) => deliver(rest, t),
+        Eq::trans(
+          Eq::sym(deliver_merge(rest, merge(s, x), x)),
+          Eq::congr(
+            (t: A) => deliver(rest, t),
+            Eq::trans(merge_assoc(s, x, x), Eq::congr((t: A) => merge(s, t), merge_idem(x)))
+          )
+        )
+      ),
+      deliver_twice(rest, merge(s, x))
+    )
+  }
+}
+
+// `ys` is a reordering of `xs`.
+pub(open) inductive Perm(A: Type): (List(A)) -> (List(A)) -> Prop {
+  PermNil: Perm(A, Nil, Nil)
+  PermCons(x: A, xs: List(A), ys: List(A), p: Perm(A, xs, ys)): Perm(A, Cons(x, xs), Cons(x, ys))
+  PermSwap(x: A, y: A, xs: List(A)): Perm(A, Cons(x, Cons(y, xs)), Cons(y, Cons(x, xs)))
+  PermTrans(
+    xs: List(A),
+    ys: List(A),
+    zs: List(A),
+    p: Perm(A, xs, ys),
+    q: Perm(A, ys, zs)
+  ): Perm(A, xs, zs)
+}
+
+// Strong eventual consistency: replicas that receive the same states in
+// any order reach the same state.
+pub theorem deliver_perm<A>(
+  xs: List(A),
+  ys: List(A),
+  p: Perm(A, xs, ys),
+  s: A
+): deliver(xs, s) = deliver(ys, s) where Semilattice(A) {
+  match p: deliver(xs, s) = deliver(ys, s) {
+    PermNil => ⊢ deliver(Nil, s) = deliver(Nil, s) from Refl
+    PermCons(x, xs2, ys2, p2) => ⊢ deliver(
+      Cons(x, xs2),
+      s
+    ) = deliver(Cons(x, ys2), s) from deliver_perm(xs2, ys2, p2, merge(s, x))
+    PermSwap(x, y, rest) => ⊢ deliver(
+      Cons(x, Cons(y, rest)),
+      s
+    ) = deliver(
+      Cons(y, Cons(x, rest)),
+      s
+    ) from Eq::congr((t: A) => deliver(rest, t), merge_swap_right(s, x, y))
+    PermTrans(xs2, ys2, zs2, p2, q2) => ⊢ deliver(
+      xs2,
+      s
+    ) = deliver(zs2, s) from Eq::trans(deliver_perm(xs2, ys2, p2, s), deliver_perm(ys2, zs2, q2, s))
+  }
+}

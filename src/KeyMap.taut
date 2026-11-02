@@ -1,0 +1,896 @@
+import "Semilattice.taut"
+import std::Base
+import std::prelude::Ord
+import std::Ord
+import "Instances.taut"
+
+// A map from keys to states, as a list of entries. Two maps merge like
+// sorted lists: the smaller key first, and the states of a key in both are
+// merged. The laws hold for every list, sorted or not, so no invariant has to
+// be carried around; the maps built with `KeyMap::put` stay sorted.
+
+module Entry {
+  pub fn key<K, V>(e: K × V): K {
+    match e: K {
+      #(k, v) => k
+    }
+  }
+
+  pub fn merge<K, V>(e: K × V, f: K × V): K × V where Semilattice(V) {
+    match e: K × V {
+      #(k, v) => match f: K × V {
+        #(k2, w) => #(k, Semilattice::merge(v, w))
+      }
+    }
+  }
+}
+
+module KeyMap {
+  fn merge_in<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    rest: (List(K × V)) -> List(K × V),
+    b: List(K × V)
+  ): List(K × V) where Ord(K), Semilattice(V) {
+    match b: List(K × V) {
+      Nil => Cons(x, xs)
+      Cons(y, ys) => match Ord::compare(&Entry::key(x), &Entry::key(y)): List(K × V) {
+        Less => Cons(x, rest(b))
+        Equal => Cons(Entry::merge(x, y), rest(ys))
+        Greater => Cons(y, KeyMap::merge_in(x, xs, rest, ys))
+      }
+    }
+  }
+
+  pub fn merge<K, V>(a: List(K × V), b: List(K × V)): List(K × V) where Ord(K), Semilattice(V) {
+    match a: List(K × V) {
+      Nil => b
+      Cons(x, xs) => KeyMap::merge_in(x, xs, (t: List(K × V)) => KeyMap::merge(xs, t), b)
+    }
+  }
+
+  // The merge of two lists that both start with an entry, by the order of
+  // their first keys.
+  pub fn pick<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    y: K × V,
+    ys: List(K × V),
+    o: Ordering
+  ): List(K × V) where Ord(K), Semilattice(V) {
+    match o: List(K × V) {
+      Less => Cons(x, KeyMap::merge(xs, Cons(y, ys)))
+      Equal => Cons(Entry::merge(x, y), KeyMap::merge(xs, ys))
+      Greater => Cons(y, KeyMap::merge(Cons(x, xs), ys))
+    }
+  }
+
+  theorem merge_less<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    y: K × V,
+    ys: List(K × V),
+    h: Ord::compare(Entry::key(x), Entry::key(y)) = Less
+  ): KeyMap::merge(
+    Cons(x, xs),
+    Cons(y, ys)
+  ) = Cons(x, KeyMap::merge(xs, Cons(y, ys))) where Ord(K), Semilattice(V) {
+    Eq::congr((o: Ordering) => KeyMap::pick(x, xs, y, ys, o), h)
+  }
+
+  theorem merge_equal<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    y: K × V,
+    ys: List(K × V),
+    h: Ord::compare(Entry::key(x), Entry::key(y)) = Equal
+  ): KeyMap::merge(
+    Cons(x, xs),
+    Cons(y, ys)
+  ) = Cons(Entry::merge(x, y), KeyMap::merge(xs, ys)) where Ord(K), Semilattice(V) {
+    Eq::congr((o: Ordering) => KeyMap::pick(x, xs, y, ys, o), h)
+  }
+
+  theorem merge_greater<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    y: K × V,
+    ys: List(K × V),
+    h: Ord::compare(Entry::key(x), Entry::key(y)) = Greater
+  ): KeyMap::merge(
+    Cons(x, xs),
+    Cons(y, ys)
+  ) = Cons(y, KeyMap::merge(Cons(x, xs), ys)) where Ord(K), Semilattice(V) {
+    Eq::congr((o: Ordering) => KeyMap::pick(x, xs, y, ys, o), h)
+  }
+
+  theorem merge_nil_right<K, V>(
+    a: List(K × V)
+  ): KeyMap::merge(a, Nil) = a where Ord(K), Semilattice(V) {
+    match a: KeyMap::merge(a, Nil) = a {
+      Nil => Refl
+      Cons(x, xs) => Refl
+    }
+  }
+}
+
+module Entry {
+  theorem comm<K, V>(
+    x: K × V,
+    y: K × V,
+    h: Entry::key(x) = Entry::key(y)
+  ): Entry::merge(x, y) = Entry::merge(y, x) where Semilattice(V) {
+    match x: Entry::merge(x, y) = Entry::merge(y, x) {
+      #(k, v) => match y: Entry::merge(#(k, v), y) = Entry::merge(y, #(k, v)) {
+        #(k2, w) => Pair::congr(
+          k,
+          Semilattice::merge(v, w),
+          k2,
+          Semilattice::merge(w, v),
+          h,
+          merge_comm(v, w)
+        )
+      }
+    }
+  }
+
+  theorem assoc<K, V>(
+    x: K × V,
+    y: K × V,
+    z: K × V
+  ): Entry::merge(Entry::merge(x, y), z) = Entry::merge(x, Entry::merge(y, z)) where Semilattice(V) {
+    match x: Entry::merge(Entry::merge(x, y), z) = Entry::merge(x, Entry::merge(y, z)) {
+      #(k1, v1) => match y: Entry::merge(
+        Entry::merge(#(k1, v1), y),
+        z
+      ) = Entry::merge(#(k1, v1), Entry::merge(y, z)) {
+        #(k2, v2) => match z: Entry::merge(
+          Entry::merge(#(k1, v1), #(k2, v2)),
+          z
+        ) = Entry::merge(#(k1, v1), Entry::merge(#(k2, v2), z)) {
+          #(k3, v3) => Eq::congr((w: V) => #(k1, w), merge_assoc(v1, v2, v3))
+        }
+      }
+    }
+  }
+
+  theorem idem<K, V>(x: K × V): Entry::merge(x, x) = x where Semilattice(V) {
+    match x: Entry::merge(x, x) = x {
+      #(k, v) => Eq::congr((w: V) => #(k, w), merge_idem(v))
+    }
+  }
+}
+
+module KeyMap {
+  theorem merge_comm_in<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    ih: ∀ t: List(K × V). KeyMap::merge(xs, t) = KeyMap::merge(t, xs),
+    b: List(K × V)
+  ): KeyMap::merge(Cons(x, xs), b) = KeyMap::merge(b, Cons(x, xs)) where Ord(K), Semilattice(V) {
+    match b: KeyMap::merge(Cons(x, xs), b) = KeyMap::merge(b, Cons(x, xs)) {
+      Nil => Refl
+      Cons(y, ys) => Ordering::cases(
+        (o: Ordering) => KeyMap::pick(x, xs, y, ys, o) = KeyMap::merge(Cons(y, ys), Cons(x, xs)),
+        Ord::compare(Entry::key(x), Entry::key(y)),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Less) => Eq::trans(
+          Eq::congr((t: List(K × V)) => Cons(x, t), ih(Cons(y, ys))),
+          Eq::sym(
+            KeyMap::merge_greater(y, ys, x, xs, ord_swap_less(Entry::key(x), Entry::key(y), h))
+          )
+        ),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Equal) => Eq::trans(
+          List::cons_congr(
+            Entry::merge(x, y),
+            Entry::merge(y, x),
+            KeyMap::merge(xs, ys),
+            KeyMap::merge(ys, xs),
+            Entry::comm(x, y, ord_equal_eq(Entry::key(x), Entry::key(y), h)),
+            ih(ys)
+          ),
+          Eq::sym(
+            KeyMap::merge_equal(
+              y,
+              ys,
+              x,
+              xs,
+              ord_eq_equal(
+                Entry::key(y),
+                Entry::key(x),
+                Eq::sym(ord_equal_eq(Entry::key(x), Entry::key(y), h))
+              )
+            )
+          )
+        ),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Greater) => Eq::trans(
+          Eq::congr((t: List(K × V)) => Cons(y, t), KeyMap::merge_comm_in(x, xs, ih, ys)),
+          Eq::sym(
+            KeyMap::merge_less(y, ys, x, xs, ord_swap_greater(Entry::key(x), Entry::key(y), h))
+          )
+        )
+      )
+    }
+  }
+
+  theorem merge_comm<K, V>(
+    a: List(K × V),
+    b: List(K × V)
+  ): KeyMap::merge(a, b) = KeyMap::merge(b, a) where Ord(K), Semilattice(V) {
+    match a: KeyMap::merge(a, b) = KeyMap::merge(b, a) {
+      Nil => Eq::sym(KeyMap::merge_nil_right(b))
+      Cons(x, xs) => KeyMap::merge_comm_in(x, xs, (t: List(K × V)) => KeyMap::merge_comm(xs, t), b)
+    }
+  }
+
+  theorem merge_idem<K, V>(a: List(K × V)): KeyMap::merge(a, a) = a where Ord(K), Semilattice(V) {
+    match a: KeyMap::merge(a, a) = a {
+      Nil => Refl
+      Cons(x, xs) => Eq::trans(
+        KeyMap::merge_equal(x, xs, x, xs, ord_eq_equal(Entry::key(x), Entry::key(x), Refl)),
+        List::cons_congr(
+          Entry::merge(x, x),
+          x,
+          KeyMap::merge(xs, xs),
+          xs,
+          Entry::idem(x),
+          KeyMap::merge_idem(xs)
+        )
+      )
+    }
+  }
+
+  // Rewriting a key in a comparison by an equal one.
+  theorem cmp_left<K>(
+    a: K,
+    a2: K,
+    b: K,
+    o: Ordering,
+    e: a = a2,
+    h: Ord::compare(a, b) = o
+  ): Ord::compare(a2, b) = o where Ord(K) {
+    Eq::subst(K, a, a2, (w: K) => Ord::compare(w, b) = o, e, h)
+  }
+
+  theorem cmp_right<K>(
+    a: K,
+    b: K,
+    b2: K,
+    o: Ordering,
+    e: b = b2,
+    h: Ord::compare(a, b) = o
+  ): Ord::compare(a, b2) = o where Ord(K) {
+    Eq::subst(K, b, b2, (w: K) => Ord::compare(a, w) = o, e, h)
+  }
+}
+
+module Entry {
+  pub theorem key_merge<K, V>(
+    x: K × V,
+    y: K × V
+  ): Entry::key(Entry::merge(x, y)) = Entry::key(x) where Semilattice(V) {
+    match x: Entry::key(Entry::merge(x, y)) = Entry::key(x) {
+      #(k, v) => match y: Entry::key(Entry::merge(#(k, v), y)) = k {
+        #(k2, w) => Refl
+      }
+    }
+  }
+}
+
+module KeyMap {
+  // The key of `d`'s first entry is after `k` (true of the empty list).
+  pub fn ahead<K, V>(k: K, d: List(K × V)): Prop where Ord(K) {
+    match d: Prop {
+      Nil => True
+      Cons(q, qs) => Ord::compare(k, Entry::key(q)) = Less
+    }
+  }
+
+  pub theorem ahead_merge<K, V>(
+    k: K,
+    b: List(K × V),
+    c: List(K × V),
+    hb: KeyMap::ahead(k, b),
+    hc: KeyMap::ahead(k, c)
+  ): KeyMap::ahead(k, KeyMap::merge(b, c)) where Ord(K), Semilattice(V) {
+    match b: KeyMap::ahead(k, KeyMap::merge(b, c)) {
+      Nil => hc
+      Cons(y, ys) => match c: KeyMap::ahead(k, KeyMap::merge(Cons(y, ys), c)) {
+        Nil => hb
+        Cons(z, zs) => Ordering::cases(
+          (o: Ordering) => KeyMap::ahead(k, KeyMap::pick(y, ys, z, zs, o)),
+          Ord::compare(Entry::key(y), Entry::key(z)),
+          (h: Ord::compare(Entry::key(y), Entry::key(z)) = Less) => hb,
+          (h: Ord::compare(Entry::key(y), Entry::key(z)) = Equal) => KeyMap::cmp_right(
+            k,
+            Entry::key(y),
+            Entry::key(Entry::merge(y, z)),
+            Less,
+            Eq::sym(Entry::key_merge(y, z)),
+            hb
+          ),
+          (h: Ord::compare(Entry::key(y), Entry::key(z)) = Greater) => hc
+        )
+      }
+    }
+  }
+
+  theorem merge_ahead_left<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    d: List(K × V),
+    h: KeyMap::ahead(Entry::key(x), d)
+  ): KeyMap::merge(Cons(x, xs), d) = Cons(x, KeyMap::merge(xs, d)) where Ord(K), Semilattice(V) {
+    match d: KeyMap::merge(Cons(x, xs), d) = Cons(x, KeyMap::merge(xs, d)) {
+      Nil => Eq::sym(Eq::congr((t: List(K × V)) => Cons(x, t), KeyMap::merge_nil_right(xs)))
+      Cons(q, qs) => KeyMap::merge_less(x, xs, q, qs, h)
+    }
+  }
+
+  theorem merge_ahead_right<K, V>(
+    z: K × V,
+    zs: List(K × V),
+    d: List(K × V),
+    h: KeyMap::ahead(Entry::key(z), d)
+  ): KeyMap::merge(d, Cons(z, zs)) = Cons(z, KeyMap::merge(d, zs)) where Ord(K), Semilattice(V) {
+    match d: KeyMap::merge(d, Cons(z, zs)) = Cons(z, KeyMap::merge(d, zs)) {
+      Nil => Refl
+      Cons(q, qs) => KeyMap::merge_greater(
+        q,
+        qs,
+        z,
+        zs,
+        ord_swap_less(Entry::key(z), Entry::key(q), h)
+      )
+    }
+  }
+
+  // The third map's first key comes before the other two.
+  theorem assoc_first_right<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    y: K × V,
+    ys: List(K × V),
+    z: K × V,
+    zs: List(K × V),
+    ih: KeyMap::merge(
+      KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+      zs
+    ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), zs)),
+    hzx: Ord::compare(Entry::key(z), Entry::key(x)) = Less,
+    hzy: Ord::compare(Entry::key(z), Entry::key(y)) = Less
+  ): KeyMap::merge(
+    KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+    Cons(z, zs)
+  ) = KeyMap::merge(
+    Cons(x, xs),
+    KeyMap::merge(Cons(y, ys), Cons(z, zs))
+  ) where Ord(K), Semilattice(V) {
+    Eq::trans(
+      KeyMap::merge_ahead_right(
+        z,
+        zs,
+        KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+        the(
+          KeyMap::ahead(Entry::key(z), KeyMap::merge(Cons(x, xs), Cons(y, ys))),
+          KeyMap::ahead_merge(
+            Entry::key(z),
+            Cons(x, xs),
+            Cons(y, ys),
+            the(KeyMap::ahead(Entry::key(z), Cons(x, xs)), hzx),
+            the(KeyMap::ahead(Entry::key(z), Cons(y, ys)), hzy)
+          )
+        )
+      ),
+      Eq::trans(
+        Eq::congr((t: List(K × V)) => Cons(z, t), ih),
+        Eq::sym(
+          Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(Cons(x, xs), t),
+              KeyMap::merge_ahead_right(
+                z,
+                zs,
+                Cons(y, ys),
+                the(KeyMap::ahead(Entry::key(z), Cons(y, ys)), hzy)
+              )
+            ),
+            KeyMap::merge_ahead_right(
+              z,
+              KeyMap::merge(Cons(y, ys), zs),
+              Cons(x, xs),
+              the(KeyMap::ahead(Entry::key(z), Cons(x, xs)), hzx)
+            )
+          )
+        )
+      )
+    )
+  }
+
+  theorem merge_assoc_c<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    iha: ∀ b: List(
+      K × V
+    ). ∀ c: List(
+      K × V
+    ). KeyMap::merge(KeyMap::merge(xs, b), c) = KeyMap::merge(xs, KeyMap::merge(b, c)),
+    y: K × V,
+    ys: List(K × V),
+    ihb: ∀ c: List(
+      K × V
+    ). KeyMap::merge(
+      KeyMap::merge(Cons(x, xs), ys),
+      c
+    ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(ys, c)),
+    c: List(K × V)
+  ): KeyMap::merge(
+    KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+    c
+  ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), c)) where Ord(K), Semilattice(V) {
+    match c: KeyMap::merge(
+      KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+      c
+    ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), c)) {
+      Nil => KeyMap::merge_nil_right(KeyMap::merge(Cons(x, xs), Cons(y, ys)))
+      Cons(z, zs) => Ordering::cases(
+        (o: Ordering) => KeyMap::merge(
+          KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+          Cons(z, zs)
+        ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), Cons(z, zs))),
+        Ord::compare(Entry::key(x), Entry::key(y)),
+        (hxy: Ord::compare(Entry::key(x), Entry::key(y)) = Less) => Ordering::cases(
+          (o: Ordering) => KeyMap::merge(
+            KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+            Cons(z, zs)
+          ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), Cons(z, zs))),
+          Ord::compare(Entry::key(x), Entry::key(z)),
+          (hxz: Ord::compare(Entry::key(x), Entry::key(z)) = Less) => Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(t, Cons(z, zs)),
+              KeyMap::merge_less(x, xs, y, ys, hxy)
+            ),
+            Eq::trans(
+              KeyMap::merge_ahead_left(
+                x,
+                KeyMap::merge(xs, Cons(y, ys)),
+                Cons(z, zs),
+                the(KeyMap::ahead(Entry::key(x), Cons(z, zs)), hxz)
+              ),
+              Eq::trans(
+                Eq::congr((t: List(K × V)) => Cons(x, t), iha(Cons(y, ys), Cons(z, zs))),
+                Eq::sym(
+                  KeyMap::merge_ahead_left(
+                    x,
+                    xs,
+                    KeyMap::merge(Cons(y, ys), Cons(z, zs)),
+                    the(
+                      KeyMap::ahead(Entry::key(x), KeyMap::merge(Cons(y, ys), Cons(z, zs))),
+                      KeyMap::ahead_merge(
+                        Entry::key(x),
+                        Cons(y, ys),
+                        Cons(z, zs),
+                        the(KeyMap::ahead(Entry::key(x), Cons(y, ys)), hxy),
+                        the(KeyMap::ahead(Entry::key(x), Cons(z, zs)), hxz)
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          (hxz: Ord::compare(Entry::key(x), Entry::key(z)) = Equal) => Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(t, Cons(z, zs)),
+              KeyMap::merge_less(x, xs, y, ys, hxy)
+            ),
+            Eq::trans(
+              KeyMap::merge_equal(x, KeyMap::merge(xs, Cons(y, ys)), z, zs, hxz),
+              Eq::trans(
+                Eq::congr((t: List(K × V)) => Cons(Entry::merge(x, z), t), iha(Cons(y, ys), zs)),
+                Eq::sym(
+                  Eq::trans(
+                    Eq::congr(
+                      (t: List(K × V)) => KeyMap::merge(Cons(x, xs), t),
+                      KeyMap::merge_greater(
+                        y,
+                        ys,
+                        z,
+                        zs,
+                        ord_swap_less(
+                          Entry::key(z),
+                          Entry::key(y),
+                          KeyMap::cmp_left(
+                            Entry::key(x),
+                            Entry::key(z),
+                            Entry::key(y),
+                            Less,
+                            ord_equal_eq(Entry::key(x), Entry::key(z), hxz),
+                            hxy
+                          )
+                        )
+                      )
+                    ),
+                    KeyMap::merge_equal(x, xs, z, KeyMap::merge(Cons(y, ys), zs), hxz)
+                  )
+                )
+              )
+            )
+          ),
+          (hxz: Ord::compare(Entry::key(x), Entry::key(z)) = Greater) => KeyMap::assoc_first_right(
+            x,
+            xs,
+            y,
+            ys,
+            z,
+            zs,
+            KeyMap::merge_assoc_c(x, xs, iha, y, ys, ihb, zs),
+            ord_swap_greater(Entry::key(x), Entry::key(z), hxz),
+            ord_trans(
+              Entry::key(z),
+              Entry::key(x),
+              Entry::key(y),
+              ord_swap_greater(Entry::key(x), Entry::key(z), hxz),
+              hxy
+            )
+          )
+        ),
+        (hxy: Ord::compare(Entry::key(x), Entry::key(y)) = Equal) => Ordering::cases(
+          (o: Ordering) => KeyMap::merge(
+            KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+            Cons(z, zs)
+          ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), Cons(z, zs))),
+          Ord::compare(Entry::key(x), Entry::key(z)),
+          (hxz: Ord::compare(Entry::key(x), Entry::key(z)) = Less) => Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(t, Cons(z, zs)),
+              KeyMap::merge_equal(x, xs, y, ys, hxy)
+            ),
+            Eq::trans(
+              KeyMap::merge_ahead_left(
+                Entry::merge(x, y),
+                KeyMap::merge(xs, ys),
+                Cons(z, zs),
+                the(
+                  KeyMap::ahead(Entry::key(Entry::merge(x, y)), Cons(z, zs)),
+                  KeyMap::cmp_left(
+                    Entry::key(x),
+                    Entry::key(Entry::merge(x, y)),
+                    Entry::key(z),
+                    Less,
+                    Eq::sym(Entry::key_merge(x, y)),
+                    hxz
+                  )
+                )
+              ),
+              Eq::trans(
+                Eq::congr((t: List(K × V)) => Cons(Entry::merge(x, y), t), iha(ys, Cons(z, zs))),
+                Eq::sym(
+                  Eq::trans(
+                    Eq::congr(
+                      (t: List(K × V)) => KeyMap::merge(Cons(x, xs), t),
+                      KeyMap::merge_ahead_left(
+                        y,
+                        ys,
+                        Cons(z, zs),
+                        the(
+                          KeyMap::ahead(Entry::key(y), Cons(z, zs)),
+                          KeyMap::cmp_left(
+                            Entry::key(x),
+                            Entry::key(y),
+                            Entry::key(z),
+                            Less,
+                            ord_equal_eq(Entry::key(x), Entry::key(y), hxy),
+                            hxz
+                          )
+                        )
+                      )
+                    ),
+                    KeyMap::merge_equal(x, xs, y, KeyMap::merge(ys, Cons(z, zs)), hxy)
+                  )
+                )
+              )
+            )
+          ),
+          (hxz: Ord::compare(Entry::key(x), Entry::key(z)) = Equal) => Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(t, Cons(z, zs)),
+              KeyMap::merge_equal(x, xs, y, ys, hxy)
+            ),
+            Eq::trans(
+              KeyMap::merge_equal(
+                Entry::merge(x, y),
+                KeyMap::merge(xs, ys),
+                z,
+                zs,
+                KeyMap::cmp_left(
+                  Entry::key(x),
+                  Entry::key(Entry::merge(x, y)),
+                  Entry::key(z),
+                  Equal,
+                  Eq::sym(Entry::key_merge(x, y)),
+                  hxz
+                )
+              ),
+              Eq::trans(
+                List::cons_congr(
+                  Entry::merge(Entry::merge(x, y), z),
+                  Entry::merge(x, Entry::merge(y, z)),
+                  KeyMap::merge(KeyMap::merge(xs, ys), zs),
+                  KeyMap::merge(xs, KeyMap::merge(ys, zs)),
+                  Entry::assoc(x, y, z),
+                  iha(ys, zs)
+                ),
+                Eq::sym(
+                  Eq::trans(
+                    Eq::congr(
+                      (t: List(K × V)) => KeyMap::merge(Cons(x, xs), t),
+                      KeyMap::merge_equal(
+                        y,
+                        ys,
+                        z,
+                        zs,
+                        ord_eq_equal(
+                          Entry::key(y),
+                          Entry::key(z),
+                          Eq::trans(
+                            Eq::sym(ord_equal_eq(Entry::key(x), Entry::key(y), hxy)),
+                            ord_equal_eq(Entry::key(x), Entry::key(z), hxz)
+                          )
+                        )
+                      )
+                    ),
+                    KeyMap::merge_equal(
+                      x,
+                      xs,
+                      Entry::merge(y, z),
+                      KeyMap::merge(ys, zs),
+                      KeyMap::cmp_right(
+                        Entry::key(x),
+                        Entry::key(y),
+                        Entry::key(Entry::merge(y, z)),
+                        Equal,
+                        Eq::sym(Entry::key_merge(y, z)),
+                        hxy
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          (hxz: Ord::compare(Entry::key(x), Entry::key(z)) = Greater) => KeyMap::assoc_first_right(
+            x,
+            xs,
+            y,
+            ys,
+            z,
+            zs,
+            KeyMap::merge_assoc_c(x, xs, iha, y, ys, ihb, zs),
+            ord_swap_greater(Entry::key(x), Entry::key(z), hxz),
+            KeyMap::cmp_right(
+              Entry::key(z),
+              Entry::key(x),
+              Entry::key(y),
+              Less,
+              ord_equal_eq(Entry::key(x), Entry::key(y), hxy),
+              ord_swap_greater(Entry::key(x), Entry::key(z), hxz)
+            )
+          )
+        ),
+        (hxy: Ord::compare(Entry::key(x), Entry::key(y)) = Greater) => Ordering::cases(
+          (o: Ordering) => KeyMap::merge(
+            KeyMap::merge(Cons(x, xs), Cons(y, ys)),
+            Cons(z, zs)
+          ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(Cons(y, ys), Cons(z, zs))),
+          Ord::compare(Entry::key(y), Entry::key(z)),
+          (hyz: Ord::compare(Entry::key(y), Entry::key(z)) = Less) => Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(t, Cons(z, zs)),
+              KeyMap::merge_greater(x, xs, y, ys, hxy)
+            ),
+            Eq::trans(
+              KeyMap::merge_ahead_left(
+                y,
+                KeyMap::merge(Cons(x, xs), ys),
+                Cons(z, zs),
+                the(KeyMap::ahead(Entry::key(y), Cons(z, zs)), hyz)
+              ),
+              Eq::trans(
+                Eq::congr((t: List(K × V)) => Cons(y, t), ihb(Cons(z, zs))),
+                Eq::sym(
+                  Eq::trans(
+                    Eq::congr(
+                      (t: List(K × V)) => KeyMap::merge(Cons(x, xs), t),
+                      KeyMap::merge_ahead_left(
+                        y,
+                        ys,
+                        Cons(z, zs),
+                        the(KeyMap::ahead(Entry::key(y), Cons(z, zs)), hyz)
+                      )
+                    ),
+                    KeyMap::merge_greater(x, xs, y, KeyMap::merge(ys, Cons(z, zs)), hxy)
+                  )
+                )
+              )
+            )
+          ),
+          (hyz: Ord::compare(Entry::key(y), Entry::key(z)) = Equal) => Eq::trans(
+            Eq::congr(
+              (t: List(K × V)) => KeyMap::merge(t, Cons(z, zs)),
+              KeyMap::merge_greater(x, xs, y, ys, hxy)
+            ),
+            Eq::trans(
+              KeyMap::merge_equal(y, KeyMap::merge(Cons(x, xs), ys), z, zs, hyz),
+              Eq::trans(
+                Eq::congr((t: List(K × V)) => Cons(Entry::merge(y, z), t), ihb(zs)),
+                Eq::sym(
+                  Eq::trans(
+                    Eq::congr(
+                      (t: List(K × V)) => KeyMap::merge(Cons(x, xs), t),
+                      KeyMap::merge_equal(y, ys, z, zs, hyz)
+                    ),
+                    KeyMap::merge_greater(
+                      x,
+                      xs,
+                      Entry::merge(y, z),
+                      KeyMap::merge(ys, zs),
+                      KeyMap::cmp_right(
+                        Entry::key(x),
+                        Entry::key(y),
+                        Entry::key(Entry::merge(y, z)),
+                        Greater,
+                        Eq::sym(Entry::key_merge(y, z)),
+                        hxy
+                      )
+                    )
+                  )
+                )
+              )
+            )
+          ),
+          (hyz: Ord::compare(Entry::key(y), Entry::key(z)) = Greater) => KeyMap::assoc_first_right(
+            x,
+            xs,
+            y,
+            ys,
+            z,
+            zs,
+            KeyMap::merge_assoc_c(x, xs, iha, y, ys, ihb, zs),
+            ord_trans(
+              Entry::key(z),
+              Entry::key(y),
+              Entry::key(x),
+              ord_swap_greater(Entry::key(y), Entry::key(z), hyz),
+              ord_swap_greater(Entry::key(x), Entry::key(y), hxy)
+            ),
+            ord_swap_greater(Entry::key(y), Entry::key(z), hyz)
+          )
+        )
+      )
+    }
+  }
+
+  theorem merge_assoc_b<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    iha: ∀ b: List(
+      K × V
+    ). ∀ c: List(
+      K × V
+    ). KeyMap::merge(KeyMap::merge(xs, b), c) = KeyMap::merge(xs, KeyMap::merge(b, c)),
+    b: List(K × V),
+    c: List(K × V)
+  ): KeyMap::merge(
+    KeyMap::merge(Cons(x, xs), b),
+    c
+  ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(b, c)) where Ord(K), Semilattice(V) {
+    match b: KeyMap::merge(
+      KeyMap::merge(Cons(x, xs), b),
+      c
+    ) = KeyMap::merge(Cons(x, xs), KeyMap::merge(b, c)) {
+      Nil => Refl
+      Cons(y, ys) => KeyMap::merge_assoc_c(
+        x,
+        xs,
+        iha,
+        y,
+        ys,
+        (t: List(K × V)) => KeyMap::merge_assoc_b(x, xs, iha, ys, t),
+        c
+      )
+    }
+  }
+
+  theorem merge_assoc<K, V>(
+    a: List(K × V),
+    b: List(K × V),
+    c: List(K × V)
+  ): KeyMap::merge(
+    KeyMap::merge(a, b),
+    c
+  ) = KeyMap::merge(a, KeyMap::merge(b, c)) where Ord(K), Semilattice(V) {
+    match a: KeyMap::merge(KeyMap::merge(a, b), c) = KeyMap::merge(a, KeyMap::merge(b, c)) {
+      Nil => Refl
+      Cons(x, xs) => KeyMap::merge_assoc_b(
+        x,
+        xs,
+        (b2: List(K × V)) => (c2: List(K × V)) => KeyMap::merge_assoc(xs, b2, c2),
+        b,
+        c
+      )
+    }
+  }
+}
+
+// A map from keys to states. Its own type, so that it does not overlap the
+// position-by-position `List` instance.
+pub(open) inductive KeyMap(K: Type, V: Type): Type {
+  Mk(entries: List(K × V)): KeyMap(K, V)
+}
+
+module KeyMap {
+  pub fn entries<K, V>(m: KeyMap(K, V)): List(K × V) {
+    match m: List(K × V) {
+      Mk(es) => es
+    }
+  }
+}
+
+pub fn keymap_of<K, V>(es: List(K × V)): KeyMap(K, V) {
+  Mk(es)
+}
+
+pub fn keymap_empty<K, V>(): KeyMap(K, V) {
+  Mk(Nil)
+}
+
+module KeyMap {
+  pub fn single<K, V>(k: K, v: V): KeyMap(K, V) {
+    Mk(Cons(#(k, v), Nil))
+  }
+}
+
+instance<K, V> Semilattice(KeyMap(K, V)) where Ord(K), Semilattice(V) {
+  fn merge(a: KeyMap(K, V), b: KeyMap(K, V)): KeyMap(K, V) {
+    Mk(KeyMap::merge(KeyMap::entries(a), KeyMap::entries(b)))
+  }
+  law comm<a: KeyMap(
+    K,
+    V
+  ), b: KeyMap(K, V)>(): Semilattice::merge(a, b) = Semilattice::merge(b, a) {
+    Eq::congr(
+      (t: List(K × V)) => keymap_of(t),
+      KeyMap::merge_comm(KeyMap::entries(a), KeyMap::entries(b))
+    )
+  }
+  law assoc<a: KeyMap(
+    K,
+    V
+  ), b: KeyMap(
+    K,
+    V
+  ), c: KeyMap(
+    K,
+    V
+  )>(): Semilattice::merge(
+    Semilattice::merge(a, b),
+    c
+  ) = Semilattice::merge(a, Semilattice::merge(b, c)) {
+    Eq::congr(
+      (t: List(K × V)) => keymap_of(t),
+      KeyMap::merge_assoc(KeyMap::entries(a), KeyMap::entries(b), KeyMap::entries(c))
+    )
+  }
+  law idem<a: KeyMap(K, V)>(): Semilattice::merge(a, a) = a {
+    match a: Semilattice::merge(a, a) = a {
+      Mk(es) => Eq::congr((t: List(K × V)) => keymap_of(t), KeyMap::merge_idem(es))
+    }
+  }
+}
+
+module KeyMap {
+  // Merge `v` into the state of `k`. The delta to send is `KeyMap::single(k, v)`.
+  pub fn put<K, V>(m: KeyMap(K, V), k: K, v: V): KeyMap(K, V) where Ord(K), Semilattice(V) {
+    Semilattice::merge(m, KeyMap::single(k, v))
+  }
+}

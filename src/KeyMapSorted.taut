@@ -1,0 +1,134 @@
+import "Semilattice.taut"
+import std::Base
+import std::prelude::Ord
+import "KeyMap.taut"
+
+module KeyMap {
+  // Every key is before the keys after it.
+  pub fn sorted<K, V>(es: List(K × V)): Prop where Ord(K) {
+    match es: Prop {
+      Nil => True
+      Cons(x, xs) => KeyMap::ahead(Entry::key(x), xs) ∧ KeyMap::sorted(xs)
+    }
+  }
+
+  theorem ahead_key<K, V>(
+    k1: K,
+    k2: K,
+    l: List(K × V),
+    e: k1 = k2,
+    h: KeyMap::ahead(k1, l)
+  ): KeyMap::ahead(k2, l) where Ord(K) {
+    Eq::subst(K, k1, k2, (z: K) => KeyMap::ahead(z, l), e, h)
+  }
+
+  theorem sorted_merge_in<K, V>(
+    x: K × V,
+    xs: List(K × V),
+    ih: ∀ t: List(
+      K × V
+    ). (KeyMap::sorted(xs)) -> (KeyMap::sorted(t)) -> KeyMap::sorted(KeyMap::merge(xs, t)),
+    b: List(K × V),
+    sa: KeyMap::sorted(Cons(x, xs)),
+    sb: KeyMap::sorted(b)
+  ): KeyMap::sorted(KeyMap::merge(Cons(x, xs), b)) where Ord(K), Semilattice(V) {
+    match b: KeyMap::sorted(KeyMap::merge(Cons(x, xs), b)) {
+      Nil => sa
+      Cons(y, ys) => Ordering::cases(
+        (o: Ordering) => KeyMap::sorted(KeyMap::pick(x, xs, y, ys, o)),
+        Ord::compare(Entry::key(x), Entry::key(y)),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Less) => AndIntro(
+          KeyMap::ahead_merge(
+            Entry::key(x),
+            xs,
+            Cons(y, ys),
+            And::left(sa),
+            the(KeyMap::ahead(Entry::key(x), Cons(y, ys)), h)
+          ),
+          ih(Cons(y, ys), And::right(sa), sb)
+        ),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Equal) => AndIntro(
+          KeyMap::ahead_key(
+            Entry::key(x),
+            Entry::key(Entry::merge(x, y)),
+            KeyMap::merge(xs, ys),
+            Eq::sym(Entry::key_merge(x, y)),
+            KeyMap::ahead_merge(
+              Entry::key(x),
+              xs,
+              ys,
+              And::left(sa),
+              KeyMap::ahead_key(
+                Entry::key(y),
+                Entry::key(x),
+                ys,
+                Eq::sym(ord_equal_eq(Entry::key(x), Entry::key(y), h)),
+                And::left(sb)
+              )
+            )
+          ),
+          ih(ys, And::right(sa), And::right(sb))
+        ),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Greater) => AndIntro(
+          KeyMap::ahead_merge(
+            Entry::key(y),
+            Cons(x, xs),
+            ys,
+            the(
+              KeyMap::ahead(Entry::key(y), Cons(x, xs)),
+              ord_swap_greater(Entry::key(x), Entry::key(y), h)
+            ),
+            And::left(sb)
+          ),
+          KeyMap::sorted_merge_in(x, xs, ih, ys, sa, And::right(sb))
+        )
+      )
+    }
+  }
+
+  // Merging sorted maps gives a sorted map.
+  pub theorem sorted_merge<K, V>(
+    a: List(K × V),
+    b: List(K × V),
+    sa: KeyMap::sorted(a),
+    sb: KeyMap::sorted(b)
+  ): KeyMap::sorted(KeyMap::merge(a, b)) where Ord(K), Semilattice(V) {
+    match a: KeyMap::sorted(KeyMap::merge(a, b)) {
+      Nil => sb
+      Cons(x, xs) => KeyMap::sorted_merge_in(
+        x,
+        xs,
+        (t: List(K × V)) => (s1: KeyMap::sorted(xs)) => (s2: KeyMap::sorted(t)) => KeyMap::sorted_merge(
+          xs,
+          t,
+          s1,
+          s2
+        ),
+        b,
+        sa,
+        sb
+      )
+    }
+  }
+
+  theorem sorted_single<K, V>(
+    k: K,
+    v: V
+  ): KeyMap::sorted(KeyMap::entries(KeyMap::single(k, v))) where Ord(K) {
+    AndIntro(Trivial, Trivial)
+  }
+
+  pub theorem sorted_put<K, V>(
+    m: KeyMap(K, V),
+    k: K,
+    v: V,
+    s: KeyMap::sorted(KeyMap::entries(m))
+  ): KeyMap::sorted(KeyMap::entries(KeyMap::put(m, k, v))) where Ord(K), Semilattice(V) {
+    KeyMap::sorted_merge(
+      KeyMap::entries(m),
+      KeyMap::entries(KeyMap::single(k, v)),
+      s,
+      KeyMap::sorted_single(k, v)
+    )
+  }
+}

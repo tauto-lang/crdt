@@ -1,0 +1,168 @@
+import "Instances.taut"
+import "Semilattice.taut"
+import std::prelude::Ord
+import "GCounter.taut"
+
+// An integer: `IntPos(n)` is `n`, `IntNegsucc(n)` is `-(n + 1)`.
+pub(open) inductive Int: Type {
+  IntPos(n: Nat): Int
+  IntNegsucc(n: Nat): Int
+}
+
+fn int_neg(n: Nat): Int {
+  match n: Int {
+    Zero => IntPos(Zero)
+    Succ(k) => IntNegsucc(k)
+  }
+}
+
+fn int_succ(a: Int): Int {
+  match a: Int {
+    IntPos(n) => IntPos(Succ(n))
+    IntNegsucc(n) => int_neg(n)
+  }
+}
+
+fn int_pred(a: Int): Int {
+  match a: Int {
+    IntPos(n) => match n: Int {
+      Zero => IntNegsucc(Zero)
+      Succ(k) => IntPos(k)
+    }
+    IntNegsucc(n) => IntNegsucc(Succ(n))
+  }
+}
+
+// `p - n`.
+fn int_diff(p: Nat, n: Nat): Int {
+  match p: Int {
+    Zero => int_neg(n)
+    Succ(p2) => match n: Int {
+      Zero => IntPos(Succ(p2))
+      Succ(n2) => int_diff(p2, n2)
+    }
+  }
+}
+
+theorem int_diff_zero_right(p: Nat): int_diff(p, Zero) = IntPos(p) {
+  match p: int_diff(p, Zero) = IntPos(p) {
+    Zero => Refl
+    Succ(k) => Refl
+  }
+}
+
+theorem int_diff_succ_left(n: Nat, p: Nat): int_diff(Succ(p), n) = int_succ(int_diff(p, n)) {
+  match n: int_diff(Succ(p), n) = int_succ(int_diff(p, n)) {
+    Zero => Eq::congr(int_succ, Eq::sym(int_diff_zero_right(p)))
+    Succ(n2) => match p: int_diff(Succ(p), Succ(n2)) = int_succ(int_diff(p, Succ(n2))) {
+      Zero => match n2: int_diff(Zero, n2) = int_succ(IntNegsucc(n2)) {
+        Zero => Refl
+        Succ(k) => Refl
+      }
+      Succ(p2) => int_diff_succ_left(n2, p2)
+    }
+  }
+}
+
+theorem int_diff_succ_right(p: Nat, n: Nat): int_diff(p, Succ(n)) = int_pred(int_diff(p, n)) {
+  match p: int_diff(p, Succ(n)) = int_pred(int_diff(p, n)) {
+    Zero => match n: IntNegsucc(n) = int_pred(int_neg(n)) {
+      Zero => Refl
+      Succ(k) => Refl
+    }
+    Succ(p2) => match n: int_diff(Succ(p2), Succ(n)) = int_pred(int_diff(Succ(p2), n)) {
+      Zero => int_diff_zero_right(p2)
+      Succ(n2) => int_diff_succ_right(p2, n2)
+    }
+  }
+}
+
+module PNCounter {
+  // A counter that goes both ways: one grow-only counter for the increments
+  // and one for the decrements, merged side by side.
+  pub fn value(c: List(Nat) × List(Nat)): Int {
+    match c: Int {
+      #(p, n) => int_diff(GCounter::value(p), GCounter::value(n))
+    }
+  }
+
+  pub fn increment(c: List(Nat) × List(Nat), i: Nat): List(Nat) × List(Nat) {
+    match c: List(Nat) × List(Nat) {
+      #(p, n) => #(GCounter::increment(p, i), n)
+    }
+  }
+
+  pub fn decrement(c: List(Nat) × List(Nat), i: Nat): List(Nat) × List(Nat) {
+    match c: List(Nat) × List(Nat) {
+      #(p, n) => #(p, GCounter::increment(n, i))
+    }
+  }
+
+  fn increment_delta(c: List(Nat) × List(Nat), i: Nat): List(Nat) × List(Nat) {
+    match c: List(Nat) × List(Nat) {
+      #(p, n) => #(GCounter::increment_delta(p, i), Nil)
+    }
+  }
+
+  fn decrement_delta(c: List(Nat) × List(Nat), i: Nat): List(Nat) × List(Nat) {
+    match c: List(Nat) × List(Nat) {
+      #(p, n) => #(Nil, GCounter::increment_delta(n, i))
+    }
+  }
+
+  theorem value_increment(
+    c: List(Nat) × List(Nat),
+    i: Nat
+  ): PNCounter::value(PNCounter::increment(c, i)) = int_succ(PNCounter::value(c)) {
+    match c: PNCounter::value(PNCounter::increment(c, i)) = int_succ(PNCounter::value(c)) {
+      #(p, n) => Eq::trans(
+        Eq::congr((v: Nat) => int_diff(v, GCounter::value(n)), GCounter::value_increment(p, i)),
+        int_diff_succ_left(GCounter::value(n), GCounter::value(p))
+      )
+    }
+  }
+
+  theorem value_decrement(
+    c: List(Nat) × List(Nat),
+    i: Nat
+  ): PNCounter::value(PNCounter::decrement(c, i)) = int_pred(PNCounter::value(c)) {
+    match c: PNCounter::value(PNCounter::decrement(c, i)) = int_pred(PNCounter::value(c)) {
+      #(p, n) => Eq::trans(
+        Eq::congr((v: Nat) => int_diff(GCounter::value(p), v), GCounter::value_increment(n, i)),
+        int_diff_succ_right(GCounter::value(p), GCounter::value(n))
+      )
+    }
+  }
+
+  theorem increment_delta_merge(
+    c: List(Nat) × List(Nat),
+    i: Nat
+  ): merge(c, PNCounter::increment_delta(c, i)) = PNCounter::increment(c, i) {
+    match c: merge(c, PNCounter::increment_delta(c, i)) = PNCounter::increment(c, i) {
+      #(p, n) => Pair::congr(
+        merge(p, GCounter::increment_delta(p, i)),
+        list_merge(n, Nil),
+        GCounter::increment(p, i),
+        n,
+        GCounter::increment_delta_merge(p, i),
+        list_merge_nil_right(n)
+      )
+    }
+  }
+
+  theorem decrement_delta_merge(
+    c: List(Nat) × List(Nat),
+    i: Nat
+  ): merge(c, PNCounter::decrement_delta(c, i)) = PNCounter::decrement(c, i) {
+    match c: merge(c, PNCounter::decrement_delta(c, i)) = PNCounter::decrement(c, i) {
+      #(p, n) => Pair::congr(
+        list_merge(p, Nil),
+        merge(n, GCounter::increment_delta(n, i)),
+        p,
+        GCounter::increment(n, i),
+        list_merge_nil_right(p),
+        GCounter::increment_delta_merge(n, i)
+      )
+    }
+  }
+}

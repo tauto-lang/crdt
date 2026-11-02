@@ -1,0 +1,93 @@
+import "Semilattice.taut"
+import std::MapLaws
+import std::prelude::Ord
+import std::Ord
+import "Latest.taut"
+
+module LwwRegister {
+  // A last-writer-wins register: a value with the time it was written. The
+  // later write wins; between writes made at the same time, the larger value
+  // wins, so every replica picks the same one.
+  pub fn new<V>(t: Nat, v: V): Latest(Nat × V) {
+    Latest::Mk(#(t, v))
+  }
+
+  fn time<V>(r: Latest(Nat × V)): Nat {
+    match r: Nat {
+      Mk(p) => match p: Nat {
+        #(t, v) => t
+      }
+    }
+  }
+
+  pub fn get<V>(r: Latest(Nat × V)): V {
+    match r: V {
+      Mk(p) => match p: V {
+        #(t, v) => v
+      }
+    }
+  }
+
+  // Write `v` at time `t`. The write is its own delta: `LwwRegister::new(t, v)` is what
+  // to send to the other replicas.
+  fn set<V>(r: Latest(Nat × V), t: Nat, v: V): Latest(Nat × V) where Ord(V) {
+    merge(r, LwwRegister::new(t, v))
+  }
+
+  theorem compare_earlier<V>(
+    t1: Nat,
+    v1: V,
+    t: Nat,
+    v: V,
+    h: Nat::lt(t1, t) = true
+  ): Ord::compare(#(t1, v1), #(t, v)) = Less where Ord(V) {
+    Eq::congr(
+      (o: Ordering) => ord_then(o, Ord::compare(v1, v)),
+      Ordmap::select_of_true(Nat::lt(t1, t), Nat::lt(t, t1), h)
+    )
+  }
+
+  theorem get_congr<V>(
+    p: Nat × V,
+    q: Nat × V,
+    e: p = q
+  ): LwwRegister::get(Latest::Mk(p)) = LwwRegister::get(Latest::Mk(q)) {
+    Eq::congr((z: Nat × V) => LwwRegister::get(Latest::Mk(z)), e)
+  }
+
+  theorem set_later_of<V>(
+    t1: Nat,
+    v1: V,
+    t: Nat,
+    v: V,
+    h: Nat::lt(t1, t) = true
+  ): LwwRegister::get(LwwRegister::set(LwwRegister::new(t1, v1), t, v)) = v where Ord(V) {
+    LwwRegister::get_congr(
+      latest_of(#(t1, v1), #(t, v)),
+      #(t, v),
+      latest_of_less(#(t1, v1), #(t, v), LwwRegister::compare_earlier(t1, v1, t, v, h))
+    )
+  }
+
+  // A write later than the register's time is what the register then holds.
+  theorem set_later<V>(
+    r: Latest(Nat × V),
+    t: Nat,
+    v: V,
+    h: Nat::lt(LwwRegister::time(r), t) = true
+  ): LwwRegister::get(LwwRegister::set(r, t, v)) = v where Ord(V) {
+    match r: LwwRegister::get(LwwRegister::set(r, t, v)) = v {
+      Mk(p) => match p: LwwRegister::get(LwwRegister::set(Latest::Mk(p), t, v)) = v {
+        #(t1, v1) => LwwRegister::set_later_of(t1, v1, t, v, h)
+      }
+    }
+  }
+
+  theorem set_inflates<V>(
+    r: Latest(Nat × V),
+    t: Nat,
+    v: V
+  ): below(r, LwwRegister::set(r, t, v)) where Ord(V) {
+    below_merge_left(r, LwwRegister::new(t, v))
+  }
+}

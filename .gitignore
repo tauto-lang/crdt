@@ -1,0 +1,11 @@
+*
+!*/
+!.gitignore
+
+!/Tauto.eure
+!/README.md
+
+!/examples/*.taut
+!/src/*.taut
+!/LICENSE-MIT
+!/LICENSE-APACHE

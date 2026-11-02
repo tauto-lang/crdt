@@ -1,0 +1,320 @@
+import "GCounter.taut"
+import "Instances.taut"
+import "KeyMap.taut"
+import "KeyMapFind.taut"
+import "Semilattice.taut"
+import std::prelude::Ord
+import "ORSet.taut"
+
+// A multi-value register: a write replaces every value the writer has seen,
+// and writes made concurrently are all kept, for the reader to resolve.
+//
+// It is an add-wins set of values: a write removes every value it sees and
+// adds its own. A concurrent write has not been seen, so it survives.
+
+module MVRegister {
+  // Forget an element's adds: the part a write merges in to remove it.
+  fn drop(o: Option(List(Nat) × List(Nat))): Option(List(Nat) × List(Nat)) {
+    match o: Option(List(Nat) × List(Nat)) {
+      None => None
+      Some(p) => match p: Option(List(Nat) × List(Nat)) {
+        #(a, m) => Some(#(Nil, a))
+      }
+    }
+  }
+
+  fn drop_entry<T>(e: T × List(Nat) × List(Nat)): T × List(Nat) × List(Nat) {
+    match e: T × List(Nat) × List(Nat) {
+      #(k, p) => match p: T × List(Nat) × List(Nat) {
+        #(a, m) => #(k, #(Nil, a))
+      }
+    }
+  }
+
+  fn drop_list<T>(es: List(T × List(Nat) × List(Nat))): List(T × List(Nat) × List(Nat)) {
+    match es: List(T × List(Nat) × List(Nat)) {
+      Nil => Nil
+      Cons(e, rest) => Cons(MVRegister::drop_entry(e), MVRegister::drop_list(rest))
+    }
+  }
+
+  // Remove every value, as the first half of a write.
+  fn clear<T>(s: KeyMap(T, List(Nat) × List(Nat))): KeyMap(T, List(Nat) × List(Nat)) where Ord(T) {
+    merge(s, Mk(MVRegister::drop_list(KeyMap::entries(s))))
+  }
+}
+
+// Write `v` from replica `r`.
+pub fn mvreg_write<T>(
+  s: KeyMap(T, List(Nat) × List(Nat)),
+  v: T,
+  r: Nat
+): KeyMap(T, List(Nat) × List(Nat)) where Ord(T) {
+  ORSet::add(MVRegister::clear(s), v, r)
+}
+
+// Whether `v` is one of the register's values.
+pub fn mvreg_has<T>(s: KeyMap(T, List(Nat) × List(Nat)), v: T): Bool where Ord(T) {
+  ORSet::contains(s, v)
+}
+
+module MVRegister {
+  fn cleared(o: Option(List(Nat) × List(Nat))): Option(List(Nat) × List(Nat)) {
+    merge(o, MVRegister::drop(o))
+  }
+
+  theorem drop_pick<T>(
+    k: T,
+    a: List(Nat),
+    m: List(Nat),
+    u: T,
+    c: Ordering
+  ): Entry::pick(#(Nil, a), c) = MVRegister::drop(Entry::pick(#(a, m), c)) {
+    match c: Entry::pick(#(Nil, a), c) = MVRegister::drop(Entry::pick(#(a, m), c)) {
+      Less => Refl
+      Equal => Refl
+      Greater => Refl
+    }
+  }
+
+  theorem drop_at<T>(
+    e: T × List(Nat) × List(Nat),
+    u: T
+  ): Entry::at(MVRegister::drop_entry(e), u) = MVRegister::drop(Entry::at(e, u)) where Ord(T) {
+    match e: Entry::at(MVRegister::drop_entry(e), u) = MVRegister::drop(Entry::at(e, u)) {
+      #(k, p) => match p: Entry::at(
+        MVRegister::drop_entry(#(k, p)),
+        u
+      ) = MVRegister::drop(Entry::at(#(k, p), u)) {
+        #(a, m) => MVRegister::drop_pick(k, a, m, u, Ord::compare(k, u))
+      }
+    }
+  }
+
+  theorem drop_merge(
+    o1: Option(List(Nat) × List(Nat)),
+    o2: Option(List(Nat) × List(Nat))
+  ): MVRegister::drop(merge(o1, o2)) = merge(MVRegister::drop(o1), MVRegister::drop(o2)) {
+    match o1: MVRegister::drop(merge(o1, o2)) = merge(MVRegister::drop(o1), MVRegister::drop(o2)) {
+      None => Refl
+      Some(p) => match p: MVRegister::drop(
+        merge(Some(p), o2)
+      ) = merge(MVRegister::drop(Some(p)), MVRegister::drop(o2)) {
+        #(a, m) => match o2: MVRegister::drop(
+          merge(Some(#(a, m)), o2)
+        ) = merge(MVRegister::drop(Some(#(a, m))), MVRegister::drop(o2)) {
+          None => Refl
+          Some(q) => match q: MVRegister::drop(
+            merge(Some(#(a, m)), Some(q))
+          ) = merge(MVRegister::drop(Some(#(a, m))), MVRegister::drop(Some(q))) {
+            #(a2, m2) => Refl
+          }
+        }
+      }
+    }
+  }
+
+  theorem drop_find<T>(
+    es: List(T × List(Nat) × List(Nat)),
+    u: T
+  ): KeyMap::find(
+    MVRegister::drop_list(es),
+    u
+  ) = MVRegister::drop(KeyMap::find(es, u)) where Ord(T) {
+    match es: KeyMap::find(MVRegister::drop_list(es), u) = MVRegister::drop(KeyMap::find(es, u)) {
+      Nil => Refl
+      Cons(e, rest) => Eq::trans(
+        Eq::congr(
+          (t: Option(List(Nat) × List(Nat))) => merge(
+            t,
+            KeyMap::find(MVRegister::drop_list(rest), u)
+          ),
+          MVRegister::drop_at(e, u)
+        ),
+        Eq::trans(
+          Eq::congr(
+            (t: Option(List(Nat) × List(Nat))) => merge(MVRegister::drop(Entry::at(e, u)), t),
+            MVRegister::drop_find(rest, u)
+          ),
+          Eq::sym(MVRegister::drop_merge(Entry::at(e, u), KeyMap::find(rest, u)))
+        )
+      )
+    }
+  }
+
+  theorem get_clear<T>(
+    s: KeyMap(T, List(Nat) × List(Nat)),
+    u: T
+  ): KeyMap::get(MVRegister::clear(s), u) = MVRegister::cleared(KeyMap::get(s, u)) where Ord(T) {
+    Eq::trans(
+      KeyMap::get_merge(s, Mk(MVRegister::drop_list(KeyMap::entries(s))), u),
+      Eq::congr(
+        (t: Option(List(Nat) × List(Nat))) => merge(KeyMap::get(s, u), t),
+        MVRegister::drop_find(KeyMap::entries(s), u)
+      )
+    )
+  }
+
+  theorem cleared_alive(
+    o: Option(List(Nat) × List(Nat))
+  ): ORSet::alive(MVRegister::cleared(o)) = false {
+    match o: ORSet::alive(MVRegister::cleared(o)) = false {
+      None => Refl
+      Some(p) => match p: ORSet::alive(MVRegister::cleared(Some(p))) = false {
+        #(a, m) => Eq::trans(
+          Eq::congr((t: List(Nat)) => list_gt(t, merge(m, a)), list_merge_nil_right(a)),
+          list_gt_merge(a, m)
+        )
+      }
+    }
+  }
+
+  theorem cleared_wellformed(
+    o: Option(List(Nat) × List(Nat)),
+    w: ORSet::wellformed(o)
+  ): ORSet::wellformed(MVRegister::cleared(o)) {
+    match o: ORSet::wellformed(MVRegister::cleared(o)) {
+      None => Trivial
+      Some(p) => match p: ORSet::wellformed(MVRegister::cleared(Some(p))) {
+        #(a, m) => Eq::subst(
+          List(Nat),
+          a,
+          merge(a, Nil),
+          (z: List(Nat)) => below(merge(m, a), z),
+          Eq::sym(list_merge_nil_right(a)),
+          merge_least(m, a, a, the(below(m, a), w), merge_idem(a))
+        )
+      }
+    }
+  }
+
+  theorem wellformed_clear<T>(
+    s: KeyMap(T, List(Nat) × List(Nat)),
+    u: T,
+    w: ORSet::wellformed(KeyMap::get(s, u))
+  ): ORSet::wellformed(KeyMap::get(MVRegister::clear(s), u)) where Ord(T) {
+    Eq::subst(
+      Option(List(Nat) × List(Nat)),
+      MVRegister::cleared(KeyMap::get(s, u)),
+      KeyMap::get(MVRegister::clear(s), u),
+      (o: Option(List(Nat) × List(Nat))) => ORSet::wellformed(o),
+      Eq::sym(MVRegister::get_clear(s, u)),
+      MVRegister::cleared_wellformed(KeyMap::get(s, u), w)
+    )
+  }
+}
+
+// After a write, the register holds the written value...
+theorem mvreg_write_has<T>(
+  s: KeyMap(T, List(Nat) × List(Nat)),
+  v: T,
+  r: Nat,
+  w: ORSet::wellformed(KeyMap::get(s, v))
+): mvreg_has(mvreg_write(s, v, r), v) = true where Ord(T) {
+  ORSet::contains_add(MVRegister::clear(s), v, r, MVRegister::wellformed_clear(s, v, w))
+}
+
+// ...and no other.
+theorem mvreg_write_only<T>(
+  s: KeyMap(T, List(Nat) × List(Nat)),
+  v: T,
+  r: Nat,
+  u: T,
+  ne: (v = u) -> False
+): mvreg_has(mvreg_write(s, v, r), u) = false where Ord(T) {
+  Eq::trans(
+    Eq::congr(
+      (o: Option(List(Nat) × List(Nat))) => ORSet::alive(o),
+      Eq::trans(
+        KeyMap::get_put_other(
+          MVRegister::clear(s),
+          v,
+          #(GCounter::increment_delta(ORSet::adds(KeyMap::get(MVRegister::clear(s), v)), r), Nil),
+          u,
+          ne
+        ),
+        MVRegister::get_clear(s, u)
+      )
+    ),
+    MVRegister::cleared_alive(KeyMap::get(s, u))
+  )
+}
+
+theorem merge_absorb_left<A>(c: A, d: A): merge(merge(c, d), c) = merge(c, d) where Semilattice(A) {
+  Eq::trans(merge_comm(merge(c, d), c), below_merge_left(c, d))
+}
+
+// Two replicas write different values from the same state: once they have
+// merged, the first replica's value `v` is still there (the write of `u` does
+// not remove it).
+theorem mvreg_concurrent<T>(
+  s: KeyMap(T, List(Nat) × List(Nat)),
+  v: T,
+  r1: Nat,
+  u: T,
+  r2: Nat,
+  ne: (u = v) -> False,
+  w: ORSet::wellformed(KeyMap::get(s, v))
+): mvreg_has(merge(mvreg_write(s, v, r1), mvreg_write(s, u, r2)), v) = true where Ord(T) {
+  Eq::trans(
+    Eq::congr(
+      (o: Option(List(Nat) × List(Nat))) => ORSet::alive(o),
+      Eq::trans(
+        KeyMap::get_merge(mvreg_write(s, v, r1), mvreg_write(s, u, r2), v),
+        Eq::trans(
+          Eq::congr(
+            (o: Option(List(Nat) × List(Nat))) => merge(o, KeyMap::get(mvreg_write(s, u, r2), v)),
+            Eq::trans(
+              ORSet::get_add(MVRegister::clear(s), v, r1),
+              Eq::congr(
+                (o: Option(List(Nat) × List(Nat))) => ORSet::add_entry(o, r1),
+                MVRegister::get_clear(s, v)
+              )
+            )
+          ),
+          Eq::trans(
+            Eq::congr(
+              (o: Option(List(Nat) × List(Nat))) => merge(
+                ORSet::add_entry(MVRegister::cleared(KeyMap::get(s, v)), r1),
+                o
+              ),
+              Eq::trans(
+                KeyMap::get_put_other(
+                  MVRegister::clear(s),
+                  u,
+                  #(
+                    GCounter::increment_delta(
+                      ORSet::adds(KeyMap::get(MVRegister::clear(s), u)),
+                      r2
+                    ),
+                    Nil
+                  ),
+                  v,
+                  ne
+                ),
+                MVRegister::get_clear(s, v)
+              )
+            ),
+            merge_absorb_left(
+              MVRegister::cleared(KeyMap::get(s, v)),
+              Some(
+                #(
+                  GCounter::increment_delta(
+                    ORSet::adds(MVRegister::cleared(KeyMap::get(s, v))),
+                    r1
+                  ),
+                  Nil
+                )
+              )
+            )
+          )
+        )
+      )
+    ),
+    ORSet::add_entry_alive(
+      MVRegister::cleared(KeyMap::get(s, v)),
+      r1,
+      MVRegister::cleared_wellformed(KeyMap::get(s, v), w)
+    )
+  )
+}

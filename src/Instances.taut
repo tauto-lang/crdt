@@ -1,0 +1,288 @@
+import std::Base
+import std::prelude::Ord
+import "Semilattice.taut"
+import "Max.taut"
+
+// The max-register: a number that only grows.
+instance Semilattice(Nat) {
+  fn merge(a: Nat, b: Nat): Nat { Max::max(a, b) }
+  law comm<a: Nat, b: Nat>(): Semilattice::merge(a, b) = Semilattice::merge(b, a) {
+    Max::max_comm(a, b)
+  }
+  law assoc<a: Nat, b: Nat, c: Nat>(): Semilattice::merge(
+    Semilattice::merge(a, b),
+    c
+  ) = Semilattice::merge(a, Semilattice::merge(b, c)) {
+    Max::max_assoc(a, b, c)
+  }
+  law idem<a: Nat>(): Semilattice::merge(a, a) = a { Max::max_idem(a) }
+}
+
+pub theorem bool_or_false_right(a: Bool): Bool::or(a, false) = a {
+  match a: Bool::or(a, false) = a {
+    false => Refl
+    true => Refl
+  }
+}
+
+// A flag that, once raised, stays raised (`true` wins).
+instance Semilattice(Bool) {
+  fn merge(a: Bool, b: Bool): Bool { Bool::or(a, b) }
+  law comm<a: Bool, b: Bool>(): Semilattice::merge(a, b) = Semilattice::merge(b, a) {
+    match a: Bool::or(a, b) = Bool::or(b, a) {
+      false => Eq::sym(bool_or_false_right(b))
+      true => match b: true = Bool::or(b, true) {
+        false => Refl
+        true => Refl
+      }
+    }
+  }
+  law assoc<a: Bool, b: Bool, c: Bool>(): Semilattice::merge(
+    Semilattice::merge(a, b),
+    c
+  ) = Semilattice::merge(a, Semilattice::merge(b, c)) {
+    match a: Bool::or(Bool::or(a, b), c) = Bool::or(a, Bool::or(b, c)) {
+      false => Refl
+      true => Refl
+    }
+  }
+  law idem<a: Bool>(): Semilattice::merge(a, a) = a {
+    match a: Bool::or(a, a) = a {
+      false => Refl
+      true => Refl
+    }
+  }
+}
+
+// Two states side by side, merged each on its own.
+instance<A, B> Semilattice(Prod(A, B)) where Semilattice(A), Semilattice(B) {
+  fn merge(p: A × B, q: A × B): A × B {
+    match p: A × B {
+      #(x1, y1) => match q: A × B {
+        #(x2, y2) => #(merge(x1, x2), merge(y1, y2))
+      }
+    }
+  }
+  law comm<p: (A × B), q: (A × B)>(): Semilattice::merge(p, q) = Semilattice::merge(q, p) {
+    match p: Semilattice::merge(p, q) = Semilattice::merge(q, p) {
+      #(x1, y1) => match q: Semilattice::merge(#(x1, y1), q) = Semilattice::merge(q, #(x1, y1)) {
+        #(x2, y2) => Pair::congr(
+          merge(x1, x2),
+          merge(y1, y2),
+          merge(x2, x1),
+          merge(y2, y1),
+          merge_comm(x1, x2),
+          merge_comm(y1, y2)
+        )
+      }
+    }
+  }
+  law assoc<p: (
+    A × B
+  ), q: (
+    A × B
+  ), r: (
+    A × B
+  )>(): Semilattice::merge(
+    Semilattice::merge(p, q),
+    r
+  ) = Semilattice::merge(p, Semilattice::merge(q, r)) {
+    match p: Semilattice::merge(
+      Semilattice::merge(p, q),
+      r
+    ) = Semilattice::merge(p, Semilattice::merge(q, r)) {
+      #(x1, y1) => match q: Semilattice::merge(
+        Semilattice::merge(#(x1, y1), q),
+        r
+      ) = Semilattice::merge(#(x1, y1), Semilattice::merge(q, r)) {
+        #(x2, y2) => match r: Semilattice::merge(
+          Semilattice::merge(#(x1, y1), #(x2, y2)),
+          r
+        ) = Semilattice::merge(#(x1, y1), Semilattice::merge(#(x2, y2), r)) {
+          #(x3, y3) => Pair::congr(
+            merge(merge(x1, x2), x3),
+            merge(merge(y1, y2), y3),
+            merge(x1, merge(x2, x3)),
+            merge(y1, merge(y2, y3)),
+            merge_assoc(x1, x2, x3),
+            merge_assoc(y1, y2, y3)
+          )
+        }
+      }
+    }
+  }
+  law idem<p: (A × B)>(): Semilattice::merge(p, p) = p {
+    match p: Semilattice::merge(p, p) = p {
+      #(x, y) => Pair::congr(merge(x, x), merge(y, y), x, y, merge_idem(x), merge_idem(y))
+    }
+  }
+}
+
+// `None` is the state that has seen nothing.
+pub fn option_merge<A>(a: Option(A), b: Option(A)): Option(A) where Semilattice(A) {
+  match a: Option(A) {
+    None => b
+    Some(x) => match b: Option(A) {
+      None => Some(x)
+      Some(y) => Some(merge(x, y))
+    }
+  }
+}
+
+pub theorem option_merge_none_right<A>(
+  a: Option(A)
+): option_merge(a, None) = a where Semilattice(A) {
+  match a: option_merge(a, None) = a {
+    None => Refl
+    Some(x) => Refl
+  }
+}
+
+instance<A> Semilattice(Option(A)) where Semilattice(A) {
+  fn merge(a: Option(A), b: Option(A)): Option(A) { option_merge(a, b) }
+  law comm<a: Option(A), b: Option(A)>(): Semilattice::merge(a, b) = Semilattice::merge(b, a) {
+    match a: option_merge(a, b) = option_merge(b, a) {
+      None => Eq::sym(option_merge_none_right(b))
+      Some(x) => match b: option_merge(Some(x), b) = option_merge(b, Some(x)) {
+        None => Refl
+        Some(y) => Eq::congr((z: A) => Some(z), merge_comm(x, y))
+      }
+    }
+  }
+  law assoc<a: Option(
+    A
+  ), b: Option(
+    A
+  ), c: Option(
+    A
+  )>(): Semilattice::merge(
+    Semilattice::merge(a, b),
+    c
+  ) = Semilattice::merge(a, Semilattice::merge(b, c)) {
+    match a: option_merge(option_merge(a, b), c) = option_merge(a, option_merge(b, c)) {
+      None => Refl
+      Some(x) => match b: option_merge(
+        option_merge(Some(x), b),
+        c
+      ) = option_merge(Some(x), option_merge(b, c)) {
+        None => Refl
+        Some(y) => match c: option_merge(
+          option_merge(Some(x), Some(y)),
+          c
+        ) = option_merge(Some(x), option_merge(Some(y), c)) {
+          None => Refl
+          Some(z) => Eq::congr((w: A) => Some(w), merge_assoc(x, y, z))
+        }
+      }
+    }
+  }
+  law idem<a: Option(A)>(): Semilattice::merge(a, a) = a {
+    match a: option_merge(a, a) = a {
+      None => Refl
+      Some(x) => Eq::congr((w: A) => Some(w), merge_idem(x))
+    }
+  }
+}
+
+// Position by position. A position missing from the shorter list has seen
+// nothing, so lists of different lengths merge.
+pub fn list_merge<A>(a: List(A), b: List(A)): List(A) where Semilattice(A) {
+  match a: List(A) {
+    Nil => b
+    Cons(x, xs) => match b: List(A) {
+      Nil => Cons(x, xs)
+      Cons(y, ys) => Cons(merge(x, y), list_merge(xs, ys))
+    }
+  }
+}
+
+pub theorem list_merge_nil_right<A>(a: List(A)): list_merge(a, Nil) = a where Semilattice(A) {
+  match a: list_merge(a, Nil) = a {
+    Nil => Refl
+    Cons(x, xs) => Refl
+  }
+}
+
+theorem list_merge_comm<A>(
+  a: List(A),
+  b: List(A)
+): list_merge(a, b) = list_merge(b, a) where Semilattice(A) {
+  match a: list_merge(a, b) = list_merge(b, a) {
+    Nil => Eq::sym(list_merge_nil_right(b))
+    Cons(x, xs) => match b: list_merge(Cons(x, xs), b) = list_merge(b, Cons(x, xs)) {
+      Nil => Refl
+      Cons(y, ys) => List::cons_congr(
+        merge(x, y),
+        merge(y, x),
+        list_merge(xs, ys),
+        list_merge(ys, xs),
+        merge_comm(x, y),
+        list_merge_comm(xs, ys)
+      )
+    }
+  }
+}
+
+theorem list_merge_assoc<A>(
+  a: List(A),
+  b: List(A),
+  c: List(A)
+): list_merge(list_merge(a, b), c) = list_merge(a, list_merge(b, c)) where Semilattice(A) {
+  match a: list_merge(list_merge(a, b), c) = list_merge(a, list_merge(b, c)) {
+    Nil => Refl
+    Cons(x, xs) => match b: list_merge(
+      list_merge(Cons(x, xs), b),
+      c
+    ) = list_merge(Cons(x, xs), list_merge(b, c)) {
+      Nil => Refl
+      Cons(y, ys) => match c: list_merge(
+        list_merge(Cons(x, xs), Cons(y, ys)),
+        c
+      ) = list_merge(Cons(x, xs), list_merge(Cons(y, ys), c)) {
+        Nil => Refl
+        Cons(z, zs) => List::cons_congr(
+          merge(merge(x, y), z),
+          merge(x, merge(y, z)),
+          list_merge(list_merge(xs, ys), zs),
+          list_merge(xs, list_merge(ys, zs)),
+          merge_assoc(x, y, z),
+          list_merge_assoc(xs, ys, zs)
+        )
+      }
+    }
+  }
+}
+
+theorem list_merge_idem<A>(a: List(A)): list_merge(a, a) = a where Semilattice(A) {
+  match a: list_merge(a, a) = a {
+    Nil => Refl
+    Cons(x, xs) => List::cons_congr(
+      merge(x, x),
+      x,
+      list_merge(xs, xs),
+      xs,
+      merge_idem(x),
+      list_merge_idem(xs)
+    )
+  }
+}
+
+instance<A> Semilattice(List(A)) where Semilattice(A) {
+  fn merge(a: List(A), b: List(A)): List(A) { list_merge(a, b) }
+  law comm<a: List(A), b: List(A)>(): Semilattice::merge(a, b) = Semilattice::merge(b, a) {
+    list_merge_comm(a, b)
+  }
+  law assoc<a: List(
+    A
+  ), b: List(
+    A
+  ), c: List(
+    A
+  )>(): Semilattice::merge(
+    Semilattice::merge(a, b),
+    c
+  ) = Semilattice::merge(a, Semilattice::merge(b, c)) {
+    list_merge_assoc(a, b, c)
+  }
+  law idem<a: List(A)>(): Semilattice::merge(a, a) = a { list_merge_idem(a) }
+}

@@ -1,0 +1,58 @@
+module Max {
+  // The join of the max-register: the larger of two numbers, by recursion on both.
+  // (The standard library's `Nat::max` decides through `Nat::lt`; recursing on both
+  // numbers keeps each law below a few lines.)
+  pub fn max(a: Nat, b: Nat): Nat {
+    match a: Nat {
+      Zero => b
+      Succ(a2) => match b: Nat {
+        Zero => Succ(a2)
+        Succ(b2) => Succ(Max::max(a2, b2))
+      }
+    }
+  }
+
+  pub theorem max_zero_right(a: Nat): Max::max(a, Zero) = a {
+    match a: Max::max(a, Zero) = a {
+      Zero => Refl
+      Succ(k) => Refl
+    }
+  }
+
+  theorem max_comm(a: Nat, b: Nat): Max::max(a, b) = Max::max(b, a) {
+    match a: Max::max(a, b) = Max::max(b, a) {
+      Zero => Eq::sym(Max::max_zero_right(b))
+      Succ(a2) => match b: Max::max(Succ(a2), b) = Max::max(b, Succ(a2)) {
+        Zero => Refl
+        Succ(b2) => Eq::congr(Succ, Max::max_comm(a2, b2))
+      }
+    }
+  }
+
+  theorem max_assoc(
+    a: Nat,
+    b: Nat,
+    c: Nat
+  ): Max::max(Max::max(a, b), c) = Max::max(a, Max::max(b, c)) {
+    match a: Max::max(Max::max(a, b), c) = Max::max(a, Max::max(b, c)) {
+      Zero => Refl
+      Succ(a2) => match b: Max::max(Max::max(Succ(a2), b), c) = Max::max(Succ(a2), Max::max(b, c)) {
+        Zero => Refl
+        Succ(b2) => match c: Max::max(
+          Max::max(Succ(a2), Succ(b2)),
+          c
+        ) = Max::max(Succ(a2), Max::max(Succ(b2), c)) {
+          Zero => Refl
+          Succ(c2) => Eq::congr(Succ, Max::max_assoc(a2, b2, c2))
+        }
+      }
+    }
+  }
+
+  theorem max_idem(a: Nat): Max::max(a, a) = a {
+    match a: Max::max(a, a) = a {
+      Zero => Refl
+      Succ(k) => Eq::congr(Succ, Max::max_idem(k))
+    }
+  }
+}

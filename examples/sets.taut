@@ -1,0 +1,84 @@
+import "../src/GCounter.taut"
+import "../src/KeyMap.taut"
+import "../src/KeyMapFind.taut"
+import "../src/ORSet.taut"
+import "../src/Semilattice.taut"
+import "../src/Sets.taut"
+import "../src/MVRegister.taut"
+
+// Two replicas start from the set {1}. One adds 1 again while the other
+// removes it; after they merge, 1 is still there.
+def start(): KeyMap(Nat, List(Nat) × List(Nat)) := ORSet::add(keymap_empty(), 1, Zero)
+
+def added(): KeyMap(Nat, List(Nat) × List(Nat)) := ORSet::add(start(), 1, Succ(Zero))
+
+def removed(): KeyMap(Nat, List(Nat) × List(Nat)) := ORSet::remove(start(), 1)
+
+theorem removed_alone(): ORSet::contains(removed(), 1) = false {
+  Refl
+}
+
+theorem add_wins(): ORSet::contains(merge(added(), removed()), 1) = true {
+  Refl
+}
+
+theorem add_wins_other_order(): ORSet::contains(merge(removed(), added()), 1) = true {
+  Refl
+}
+
+// A remove that has seen the add removes it on every replica.
+theorem remove_after_add(): ORSet::contains(merge(ORSet::remove(added(), 1), start()), 1) = false {
+  Refl
+}
+
+// A grow-only set and a two-phase set.
+theorem gset_example(): gset_contains(
+  merge(gset_add(keymap_empty(), 3), gset_add(keymap_empty(), 5)),
+  5
+) = true {
+  Refl
+}
+
+theorem twopset_example(): twopset_contains(
+  merge(
+    twopset_remove(twopset_add(#(keymap_empty(), keymap_empty()), 3), 3),
+    twopset_add(#(keymap_empty(), keymap_empty()), 3)
+  ),
+  3
+) = false {
+  Refl
+}
+
+// A map from keys to counters: each key merges as a grow-only counter.
+theorem map_of_counters(): KeyMap::get(
+  merge(
+    KeyMap::put(keymap_empty(), 7, GCounter::increment(Nil, Zero)),
+    KeyMap::put(keymap_empty(), 7, GCounter::increment(Nil, Succ(Zero)))
+  ),
+  7
+) = Some(Cons(1, Cons(1, Nil))) {
+  Refl
+}
+
+// A multi-value register: two concurrent writes are both kept, and a later
+// write that has seen them replaces both.
+def written(): KeyMap(Nat, List(Nat) × List(Nat)) := mvreg_write(keymap_empty(), 10, Zero)
+
+def both(): KeyMap(Nat, List(Nat) × List(Nat)) :=
+merge(mvreg_write(written(), 20, Zero), mvreg_write(written(), 30, Succ(Zero)))
+
+theorem both_kept(): Eq(
+  Bool × Bool × Bool,
+  #(mvreg_has(both(), 10), #(mvreg_has(both(), 20), mvreg_has(both(), 30))),
+  #(false, #(true, true))
+) {
+  Refl
+}
+
+theorem replaced(): Eq(
+  Bool × Bool,
+  #(mvreg_has(mvreg_write(both(), 40, Zero), 20), mvreg_has(mvreg_write(both(), 40, Zero), 40)),
+  #(false, true)
+) {
+  Refl
+}

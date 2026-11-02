@@ -1,0 +1,503 @@
+import "Instances.taut"
+import "KeyMap.taut"
+import "KeyMapFind.taut"
+import "Max.taut"
+import "Semilattice.taut"
+import std::Base
+import std::prelude::Ord
+import "GCounter.taut"
+import "Sets.taut"
+
+// An observed-remove set where a concurrent add wins over a remove.
+//
+// Each element has two grow-only counters, by replica: how many times each
+// replica has added it, and how many of those adds had been seen when it was
+// last removed. The element is in the set when some replica has added it more
+// times than a remove has seen. A remove only cancels the adds it has seen,
+// so an add made at the same time survives the merge (`ORSet::add_wins`).
+// This is the observed-remove set with each replica's add tags compacted to
+// a counter: the tags of one replica are numbered in order, and a remove
+// sees a prefix of them.
+
+pub theorem succ_ne_zero(n: Nat, e: Succ(n) = Zero): False {
+  match e: False {
+  }
+}
+
+module Max {
+  pub theorem max_below_lt(y: Nat, x: Nat, h: Max::max(y, x) = x): Nat::lt(y, Succ(x)) = true {
+    match y: Nat::lt(y, Succ(x)) = true {
+      Zero => Refl
+      Succ(y2) => match x: Nat::lt(Succ(y2), Succ(x)) = true {
+        Zero => False::elim(succ_ne_zero(y2, h))
+        Succ(x2) => Max::max_below_lt(y2, x2, Eq::congr(Nat::pred, h))
+      }
+    }
+  }
+
+  theorem max_not_lt(y: Nat, x: Nat): Nat::lt(Max::max(y, x), x) = false {
+    match y: Nat::lt(Max::max(y, x), x) = false {
+      Zero => Nat::lt_irrefl(x)
+      Succ(y2) => match x: Nat::lt(Max::max(Succ(y2), x), x) = false {
+        Zero => Refl
+        Succ(x2) => Max::max_not_lt(y2, x2)
+      }
+    }
+  }
+}
+
+// Some position of `a` is larger than the same position of `r` (a missing
+// position is zero).
+pub fn list_gt(a: List(Nat), r: List(Nat)): Bool {
+  match a: Bool {
+    Nil => false
+    Cons(x, xs) => match r: Bool {
+      Nil => Bool::or(Nat::lt(Zero, x), list_gt(xs, Nil))
+      Cons(y, ys) => Bool::or(Nat::lt(y, x), list_gt(xs, ys))
+    }
+  }
+}
+
+theorem list_gt_self(a: List(Nat)): list_gt(a, a) = false {
+  match a: list_gt(a, a) = false {
+    Nil => Refl
+    Cons(x, xs) => Eq::trans(
+      Eq::congr((b: Bool) => Bool::or(b, list_gt(xs, xs)), Nat::lt_irrefl(x)),
+      list_gt_self(xs)
+    )
+  }
+}
+
+pub theorem list_gt_merge(a: List(Nat), m: List(Nat)): list_gt(a, merge(m, a)) = false {
+  match a: list_gt(a, merge(m, a)) = false {
+    Nil => Refl
+    Cons(x, xs) => match m: list_gt(Cons(x, xs), merge(m, Cons(x, xs))) = false {
+      Nil => list_gt_self(Cons(x, xs))
+      Cons(y, ys) => Eq::trans(
+        Eq::congr((b: Bool) => Bool::or(b, list_gt(xs, merge(ys, xs))), Max::max_not_lt(y, x)),
+        list_gt_merge(xs, ys)
+      )
+    }
+  }
+}
+
+theorem list_gt_single(r: Nat): list_gt(GCounter::single(r), Nil) = true {
+  match r: list_gt(GCounter::single(r), Nil) = true {
+    Zero => Refl
+    Succ(j) => list_gt_single(j)
+  }
+}
+
+// After an increment, the counts are larger than any counts below the old
+// ones.
+theorem list_gt_increment(
+  a: List(Nat),
+  r: Nat,
+  m: List(Nat),
+  h: below(m, a)
+): list_gt(GCounter::increment(a, r), m) = true {
+  match a: list_gt(GCounter::increment(a, r), m) = true {
+    Nil => Eq::subst(
+      List(Nat),
+      Nil,
+      m,
+      (z: List(Nat)) => list_gt(GCounter::single(r), z) = true,
+      Eq::sym(Eq::trans(Eq::sym(list_merge_nil_right(m)), h)),
+      list_gt_single(r)
+    )
+    Cons(x, xs) => match r: list_gt(GCounter::increment(Cons(x, xs), r), m) = true {
+      Zero => match m: list_gt(Cons(Succ(x), xs), m) = true {
+        Nil => Refl
+        Cons(y, ys) => Eq::congr(
+          (b: Bool) => Bool::or(b, list_gt(xs, ys)),
+          Max::max_below_lt(
+            y,
+            x,
+            And::left(List::cons_inj(Max::max(y, x), x, merge(ys, xs), xs, h))
+          )
+        )
+      }
+      Succ(j) => match m: list_gt(Cons(x, GCounter::increment(xs, j)), m) = true {
+        Nil => Eq::trans(
+          Eq::congr(
+            (b: Bool) => Bool::or(Nat::lt(Zero, x), b),
+            list_gt_increment(xs, j, Nil, Refl)
+          ),
+          bool_or_true_right(Nat::lt(Zero, x))
+        )
+        Cons(y, ys) => Eq::trans(
+          Eq::congr(
+            (b: Bool) => Bool::or(Nat::lt(y, x), b),
+            list_gt_increment(
+              xs,
+              j,
+              ys,
+              And::right(List::cons_inj(Max::max(y, x), x, merge(ys, xs), xs, h))
+            )
+          ),
+          bool_or_true_right(Nat::lt(y, x))
+        )
+      }
+    }
+  }
+}
+
+module ORSet {
+  // The state of one element.
+  pub fn alive(o: Option(List(Nat) × List(Nat))): Bool {
+    match o: Bool {
+      None => false
+      Some(p) => match p: Bool {
+        #(a, m) => list_gt(a, m)
+      }
+    }
+  }
+
+  pub fn adds(o: Option(List(Nat) × List(Nat))): List(Nat) {
+    match o: List(Nat) {
+      None => Nil
+      Some(p) => match p: List(Nat) {
+        #(a, m) => a
+      }
+    }
+  }
+
+  // What a replica can reach: a remove has never seen more adds than there were.
+  pub fn wellformed(o: Option(List(Nat) × List(Nat))): Prop {
+    match o: Prop {
+      None => True
+      Some(p) => match p: Prop {
+        #(a, m) => below(m, a)
+      }
+    }
+  }
+
+  pub fn contains<K>(s: KeyMap(K, List(Nat) × List(Nat)), k: K): Bool where Ord(K) {
+    ORSet::alive(KeyMap::get(s, k))
+  }
+
+  // The deltas of an add by replica `r` and of a remove. Merging the delta is
+  // the operation, and the delta is what to send.
+  fn add_delta<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    r: Nat
+  ): KeyMap(K, List(Nat) × List(Nat)) where Ord(K) {
+    KeyMap::single(k, #(GCounter::increment_delta(ORSet::adds(KeyMap::get(s, k)), r), Nil))
+  }
+
+  fn remove_delta<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K
+  ): KeyMap(K, List(Nat) × List(Nat)) where Ord(K) {
+    KeyMap::single(k, #(Nil, ORSet::adds(KeyMap::get(s, k))))
+  }
+
+  pub fn add<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    r: Nat
+  ): KeyMap(K, List(Nat) × List(Nat)) where Ord(K) {
+    merge(s, ORSet::add_delta(s, k, r))
+  }
+
+  pub fn remove<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K
+  ): KeyMap(K, List(Nat) × List(Nat)) where Ord(K) {
+    merge(s, ORSet::remove_delta(s, k))
+  }
+
+  pub fn add_entry(o: Option(List(Nat) × List(Nat)), r: Nat): Option(List(Nat) × List(Nat)) {
+    merge(o, Some(#(GCounter::increment_delta(ORSet::adds(o), r), Nil)))
+  }
+
+  fn remove_entry(o: Option(List(Nat) × List(Nat))): Option(List(Nat) × List(Nat)) {
+    merge(o, Some(#(Nil, ORSet::adds(o))))
+  }
+}
+
+theorem list_gt_congr(
+  a: List(Nat),
+  a2: List(Nat),
+  m: List(Nat),
+  m2: List(Nat),
+  ea: a = a2,
+  em: m = m2
+): list_gt(a, m) = list_gt(a2, m2) {
+  Eq::trans(
+    Eq::congr((t: List(Nat)) => list_gt(t, m), ea),
+    Eq::congr((t: List(Nat)) => list_gt(a2, t), em)
+  )
+}
+
+module ORSet {
+  pub theorem add_entry_alive(
+    o: Option(List(Nat) × List(Nat)),
+    r: Nat,
+    w: ORSet::wellformed(o)
+  ): ORSet::alive(ORSet::add_entry(o, r)) = true {
+    match o: ORSet::alive(ORSet::add_entry(o, r)) = true {
+      None => list_gt_single(r)
+      Some(p) => match p: ORSet::alive(ORSet::add_entry(Some(p), r)) = true {
+        #(a, m) => Eq::trans(
+          list_gt_congr(
+            merge(a, GCounter::increment_delta(a, r)),
+            GCounter::increment(a, r),
+            merge(m, Nil),
+            m,
+            GCounter::increment_delta_merge(a, r),
+            list_merge_nil_right(m)
+          ),
+          list_gt_increment(a, r, m, w)
+        )
+      }
+    }
+  }
+
+  theorem remove_entry_alive(
+    o: Option(List(Nat) × List(Nat))
+  ): ORSet::alive(ORSet::remove_entry(o)) = false {
+    match o: ORSet::alive(ORSet::remove_entry(o)) = false {
+      None => Refl
+      Some(p) => match p: ORSet::alive(ORSet::remove_entry(Some(p))) = false {
+        #(a, m) => Eq::trans(
+          Eq::congr((t: List(Nat)) => list_gt(t, merge(m, a)), list_merge_nil_right(a)),
+          list_gt_merge(a, m)
+        )
+      }
+    }
+  }
+
+  // An add and a remove made concurrently from the same state: the add wins.
+  theorem add_wins_entry(
+    o: Option(List(Nat) × List(Nat)),
+    r: Nat,
+    w: ORSet::wellformed(o)
+  ): ORSet::alive(merge(ORSet::add_entry(o, r), ORSet::remove_entry(o))) = true {
+    match o: ORSet::alive(merge(ORSet::add_entry(o, r), ORSet::remove_entry(o))) = true {
+      None => Eq::trans(
+        Eq::congr((t: List(Nat)) => list_gt(t, Nil), list_merge_nil_right(GCounter::single(r))),
+        list_gt_single(r)
+      )
+      Some(p) => match p: ORSet::alive(
+        merge(ORSet::add_entry(Some(p), r), ORSet::remove_entry(Some(p)))
+      ) = true {
+        #(a, m) => Eq::trans(
+          list_gt_congr(
+            merge(merge(a, GCounter::increment_delta(a, r)), merge(a, Nil)),
+            GCounter::increment(a, r),
+            merge(merge(m, Nil), merge(m, a)),
+            a,
+            Eq::trans(
+              Eq::congr(
+                (t: List(Nat)) => merge(t, merge(a, Nil)),
+                GCounter::increment_delta_merge(a, r)
+              ),
+              Eq::trans(
+                Eq::congr(
+                  (t: List(Nat)) => merge(GCounter::increment(a, r), t),
+                  list_merge_nil_right(a)
+                ),
+                Eq::trans(
+                  merge_comm(GCounter::increment(a, r), a),
+                  GCounter::increment_inflates(a, r)
+                )
+              )
+            ),
+            Eq::trans(
+              Eq::congr((t: List(Nat)) => merge(t, merge(m, a)), list_merge_nil_right(m)),
+              Eq::trans(below_merge_left(m, a), w)
+            )
+          ),
+          list_gt_increment(a, r, a, merge_idem(a))
+        )
+      }
+    }
+  }
+
+  pub theorem get_add<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    r: Nat
+  ): KeyMap::get(ORSet::add(s, k, r), k) = ORSet::add_entry(KeyMap::get(s, k), r) where Ord(K) {
+    KeyMap::get_put(s, k, #(GCounter::increment_delta(ORSet::adds(KeyMap::get(s, k)), r), Nil))
+  }
+
+  theorem get_remove<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K
+  ): KeyMap::get(ORSet::remove(s, k), k) = ORSet::remove_entry(KeyMap::get(s, k)) where Ord(K) {
+    KeyMap::get_put(s, k, #(Nil, ORSet::adds(KeyMap::get(s, k))))
+  }
+
+  // After an add, the element is in the set.
+  pub theorem contains_add<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    r: Nat,
+    w: ORSet::wellformed(KeyMap::get(s, k))
+  ): ORSet::contains(ORSet::add(s, k, r), k) = true where Ord(K) {
+    Eq::trans(
+      Eq::congr((o: Option(List(Nat) × List(Nat))) => ORSet::alive(o), ORSet::get_add(s, k, r)),
+      ORSet::add_entry_alive(KeyMap::get(s, k), r, w)
+    )
+  }
+
+  // After a remove, it is not.
+  theorem contains_remove<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K
+  ): ORSet::contains(ORSet::remove(s, k), k) = false where Ord(K) {
+    Eq::trans(
+      Eq::congr((o: Option(List(Nat) × List(Nat))) => ORSet::alive(o), ORSet::get_remove(s, k)),
+      ORSet::remove_entry_alive(KeyMap::get(s, k))
+    )
+  }
+
+  // One replica adds `k` while another removes it, both from `s`; once they
+  // have merged, `k` is in the set.
+  pub theorem add_wins<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    r: Nat,
+    w: ORSet::wellformed(KeyMap::get(s, k))
+  ): ORSet::contains(merge(ORSet::add(s, k, r), ORSet::remove(s, k)), k) = true where Ord(K) {
+    Eq::trans(
+      Eq::congr(
+        (o: Option(List(Nat) × List(Nat))) => ORSet::alive(o),
+        Eq::trans(
+          KeyMap::get_merge(ORSet::add(s, k, r), ORSet::remove(s, k), k),
+          Eq::trans(
+            Eq::congr(
+              (o: Option(List(Nat) × List(Nat))) => merge(o, KeyMap::get(ORSet::remove(s, k), k)),
+              ORSet::get_add(s, k, r)
+            ),
+            Eq::congr(
+              (o: Option(List(Nat) × List(Nat))) => merge(
+                ORSet::add_entry(KeyMap::get(s, k), r),
+                o
+              ),
+              ORSet::get_remove(s, k)
+            )
+          )
+        )
+      ),
+      ORSet::add_wins_entry(KeyMap::get(s, k), r, w)
+    )
+  }
+
+  // Every operation keeps the states wellformed.
+
+  theorem wellformed_merge(
+    o1: Option(List(Nat) × List(Nat)),
+    o2: Option(List(Nat) × List(Nat)),
+    w1: ORSet::wellformed(o1),
+    w2: ORSet::wellformed(o2)
+  ): ORSet::wellformed(merge(o1, o2)) {
+    match o1: ORSet::wellformed(merge(o1, o2)) {
+      None => w2
+      Some(p) => match p: ORSet::wellformed(merge(Some(p), o2)) {
+        #(a, m) => match o2: ORSet::wellformed(merge(Some(#(a, m)), o2)) {
+          None => w1
+          Some(q) => match q: ORSet::wellformed(merge(Some(#(a, m)), Some(q))) {
+            #(a2, m2) => below_merge_both(
+              m,
+              a,
+              m2,
+              a2,
+              the(below(m, a), w1),
+              the(below(m2, a2), w2)
+            )
+          }
+        }
+      }
+    }
+  }
+
+  theorem wellformed_add_entry(
+    o: Option(List(Nat) × List(Nat)),
+    r: Nat,
+    w: ORSet::wellformed(o)
+  ): ORSet::wellformed(ORSet::add_entry(o, r)) {
+    ORSet::wellformed_merge(
+      o,
+      Some(#(GCounter::increment_delta(ORSet::adds(o), r), Nil)),
+      w,
+      the(
+        merge(
+          Nil,
+          GCounter::increment_delta(ORSet::adds(o), r)
+        ) = GCounter::increment_delta(ORSet::adds(o), r),
+        Refl
+      )
+    )
+  }
+
+  theorem wellformed_remove_entry(
+    o: Option(List(Nat) × List(Nat)),
+    w: ORSet::wellformed(o)
+  ): ORSet::wellformed(ORSet::remove_entry(o)) {
+    match o: ORSet::wellformed(ORSet::remove_entry(o)) {
+      None => the(merge(Nil(Nat), Nil(Nat)) = Nil(Nat), Refl)
+      Some(p) => match p: ORSet::wellformed(ORSet::remove_entry(Some(p))) {
+        #(a, m) => Eq::subst(
+          List(Nat),
+          a,
+          merge(a, Nil),
+          (z: List(Nat)) => below(merge(m, a), z),
+          Eq::sym(list_merge_nil_right(a)),
+          merge_least(m, a, a, the(below(m, a), w), merge_idem(a))
+        )
+      }
+    }
+  }
+
+  theorem wellformed_add<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    r: Nat,
+    w: ORSet::wellformed(KeyMap::get(s, k))
+  ): ORSet::wellformed(KeyMap::get(ORSet::add(s, k, r), k)) where Ord(K) {
+    Eq::subst(
+      Option(List(Nat) × List(Nat)),
+      ORSet::add_entry(KeyMap::get(s, k), r),
+      KeyMap::get(ORSet::add(s, k, r), k),
+      (o: Option(List(Nat) × List(Nat))) => ORSet::wellformed(o),
+      Eq::sym(ORSet::get_add(s, k, r)),
+      ORSet::wellformed_add_entry(KeyMap::get(s, k), r, w)
+    )
+  }
+
+  theorem wellformed_remove<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    w: ORSet::wellformed(KeyMap::get(s, k))
+  ): ORSet::wellformed(KeyMap::get(ORSet::remove(s, k), k)) where Ord(K) {
+    Eq::subst(
+      Option(List(Nat) × List(Nat)),
+      ORSet::remove_entry(KeyMap::get(s, k)),
+      KeyMap::get(ORSet::remove(s, k), k),
+      (o: Option(List(Nat) × List(Nat))) => ORSet::wellformed(o),
+      Eq::sym(ORSet::get_remove(s, k)),
+      ORSet::wellformed_remove_entry(KeyMap::get(s, k), w)
+    )
+  }
+
+  theorem wellformed_merge_at<K>(
+    s: KeyMap(K, List(Nat) × List(Nat)),
+    t: KeyMap(K, List(Nat) × List(Nat)),
+    k: K,
+    w1: ORSet::wellformed(KeyMap::get(s, k)),
+    w2: ORSet::wellformed(KeyMap::get(t, k))
+  ): ORSet::wellformed(KeyMap::get(merge(s, t), k)) where Ord(K) {
+    Eq::subst(
+      Option(List(Nat) × List(Nat)),
+      merge(KeyMap::get(s, k), KeyMap::get(t, k)),
+      KeyMap::get(merge(s, t), k),
+      (o: Option(List(Nat) × List(Nat))) => ORSet::wellformed(o),
+      Eq::sym(KeyMap::get_merge(s, t, k)),
+      ORSet::wellformed_merge(KeyMap::get(s, k), KeyMap::get(t, k), w1, w2)
+    )
+  }
+}

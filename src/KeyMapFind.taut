@@ -1,0 +1,266 @@
+import "Instances.taut"
+import "Semilattice.taut"
+import std::Base
+import std::prelude::Ord
+import "KeyMap.taut"
+
+// `merge_assoc`, which the modules below cannot name: `KeyMap::merge_assoc` hides it there.
+pub theorem semilattice_assoc<A>(
+  a: A,
+  b: A,
+  c: A
+): Semilattice::merge(
+  Semilattice::merge(a, b),
+  c
+) = Semilattice::merge(a, Semilattice::merge(b, c)) where Semilattice(A) {
+  merge_assoc(a, b, c)
+}
+
+module Entry {
+  // What an entry holds for `k`: its value when the comparison of its key with `k` is `Equal`, else nothing.
+  pub fn pick<V>(v: V, o: Ordering): Option(V) {
+    match o: Option(V) {
+      Less => None
+      Equal => Some(v)
+      Greater => None
+    }
+  }
+
+  pub fn at<K, V>(e: K × V, k: K): Option(V) where Ord(K) {
+    match e: Option(V) {
+      #(k1, v) => Entry::pick(v, Ord::compare(&k1, &k))
+    }
+  }
+}
+
+module KeyMap {
+  pub fn find<K, V>(es: List(K × V), k: K): Option(V) where Ord(K), Semilattice(V) {
+    match es: Option(V) {
+      Nil => None
+      Cons(e, rest) => Semilattice::merge(Entry::at(e, k), KeyMap::find(rest, k))
+    }
+  }
+}
+
+module Entry {
+  theorem pick_merge<V>(
+    v: V,
+    w: V,
+    o: Ordering
+  ): Entry::pick(
+    Semilattice::merge(v, w),
+    o
+  ) = Semilattice::merge(Entry::pick(v, o), Entry::pick(w, o)) where Semilattice(V) {
+    match o: Entry::pick(
+      Semilattice::merge(v, w),
+      o
+    ) = Semilattice::merge(Entry::pick(v, o), Entry::pick(w, o)) {
+      Less => Refl
+      Equal => Refl
+      Greater => Refl
+    }
+  }
+
+  theorem at_merge<K, V>(
+    x: K × V,
+    y: K × V,
+    k: K,
+    e: Entry::key(x) = Entry::key(y)
+  ): Entry::at(
+    Entry::merge(x, y),
+    k
+  ) = Semilattice::merge(Entry::at(x, k), Entry::at(y, k)) where Ord(K), Semilattice(V) {
+    match x: Entry::at(
+      Entry::merge(x, y),
+      k
+    ) = Semilattice::merge(Entry::at(x, k), Entry::at(y, k)) {
+      #(k1, v) => match y: Entry::at(
+        Entry::merge(#(k1, v), y),
+        k
+      ) = Semilattice::merge(Entry::at(#(k1, v), k), Entry::at(y, k)) {
+        #(k2, w) => Eq::subst(
+          K,
+          k1,
+          k2,
+          (z: K) => Entry::pick(
+            Semilattice::merge(v, w),
+            Ord::compare(k1, k)
+          ) = Semilattice::merge(
+            Entry::pick(v, Ord::compare(k1, k)),
+            Entry::pick(w, Ord::compare(z, k))
+          ),
+          e,
+          Entry::pick_merge(v, w, Ord::compare(k1, k))
+        )
+      }
+    }
+  }
+}
+
+module KeyMap {
+  theorem find_merge_in<K, V>(
+    k: K,
+    x: K × V,
+    xs: List(K × V),
+    ih: ∀ t: List(
+      K × V
+    ). KeyMap::find(
+      KeyMap::merge(xs, t),
+      k
+    ) = Semilattice::merge(KeyMap::find(xs, k), KeyMap::find(t, k)),
+    b: List(K × V)
+  ): KeyMap::find(
+    KeyMap::merge(Cons(x, xs), b),
+    k
+  ) = Semilattice::merge(
+    KeyMap::find(Cons(x, xs), k),
+    KeyMap::find(b, k)
+  ) where Ord(K), Semilattice(V) {
+    match b: KeyMap::find(
+      KeyMap::merge(Cons(x, xs), b),
+      k
+    ) = Semilattice::merge(KeyMap::find(Cons(x, xs), k), KeyMap::find(b, k)) {
+      Nil => Eq::sym(option_merge_none_right(KeyMap::find(Cons(x, xs), k)))
+      Cons(y, ys) => Ordering::cases(
+        (o: Ordering) => KeyMap::find(
+          KeyMap::pick(x, xs, y, ys, o),
+          k
+        ) = Semilattice::merge(KeyMap::find(Cons(x, xs), k), KeyMap::find(Cons(y, ys), k)),
+        Ord::compare(Entry::key(x), Entry::key(y)),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Less) => Eq::trans(
+          Eq::congr((t: Option(V)) => Semilattice::merge(Entry::at(x, k), t), ih(Cons(y, ys))),
+          Eq::sym(
+            semilattice_assoc(Entry::at(x, k), KeyMap::find(xs, k), KeyMap::find(Cons(y, ys), k))
+          )
+        ),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Equal) => Eq::trans(
+          Eq::congr(
+            (t: Option(V)) => Semilattice::merge(t, KeyMap::find(KeyMap::merge(xs, ys), k)),
+            Entry::at_merge(x, y, k, ord_equal_eq(Entry::key(x), Entry::key(y), h))
+          ),
+          Eq::trans(
+            Eq::congr(
+              (t: Option(V)) => Semilattice::merge(
+                Semilattice::merge(Entry::at(x, k), Entry::at(y, k)),
+                t
+              ),
+              ih(ys)
+            ),
+            merge_interchange(
+              Entry::at(x, k),
+              Entry::at(y, k),
+              KeyMap::find(xs, k),
+              KeyMap::find(ys, k)
+            )
+          )
+        ),
+        (h: Ord::compare(Entry::key(x), Entry::key(y)) = Greater) => Eq::trans(
+          Eq::congr(
+            (t: Option(V)) => Semilattice::merge(Entry::at(y, k), t),
+            KeyMap::find_merge_in(k, x, xs, ih, ys)
+          ),
+          merge_left_comm(Entry::at(y, k), KeyMap::find(Cons(x, xs), k), KeyMap::find(ys, k))
+        )
+      )
+    }
+  }
+
+  // Looking a key up commutes with the merge: the merged map holds, for each
+  // key, the merge of the two states.
+  theorem find_merge<K, V>(
+    a: List(K × V),
+    b: List(K × V),
+    k: K
+  ): KeyMap::find(
+    KeyMap::merge(a, b),
+    k
+  ) = Semilattice::merge(KeyMap::find(a, k), KeyMap::find(b, k)) where Ord(K), Semilattice(V) {
+    match a: KeyMap::find(
+      KeyMap::merge(a, b),
+      k
+    ) = Semilattice::merge(KeyMap::find(a, k), KeyMap::find(b, k)) {
+      Nil => Refl
+      Cons(x, xs) => KeyMap::find_merge_in(
+        k,
+        x,
+        xs,
+        (t: List(K × V)) => KeyMap::find_merge(xs, t, k),
+        b
+      )
+    }
+  }
+
+  // The state of `k` in a map.
+  pub fn get<K, V>(m: KeyMap(K, V), k: K): Option(V) where Ord(K), Semilattice(V) {
+    KeyMap::find(KeyMap::entries(m), k)
+  }
+
+  pub theorem get_merge<K, V>(
+    a: KeyMap(K, V),
+    b: KeyMap(K, V),
+    k: K
+  ): KeyMap::get(
+    Semilattice::merge(a, b),
+    k
+  ) = Semilattice::merge(KeyMap::get(a, k), KeyMap::get(b, k)) where Ord(K), Semilattice(V) {
+    KeyMap::find_merge(KeyMap::entries(a), KeyMap::entries(b), k)
+  }
+
+  theorem get_single<K, V>(
+    k: K,
+    v: V
+  ): KeyMap::get(KeyMap::single(k, v), k) = Some(v) where Ord(K), Semilattice(V) {
+    Eq::congr((o: Ordering) => option_merge(Entry::pick(v, o), None), ord_eq_equal(k, k, Refl))
+  }
+
+  theorem get_single_other<K, V>(
+    k: K,
+    v: V,
+    k2: K,
+    ne: (k = k2) -> False
+  ): KeyMap::get(KeyMap::single(k, v), k2) = None where Ord(K), Semilattice(V) {
+    Ordering::cases(
+      (o: Ordering) => option_merge(Entry::pick(v, o), None) = None,
+      Ord::compare(k, k2),
+      (h: Ord::compare(k, k2) = Less) => Refl,
+      (h: Ord::compare(k, k2) = Equal) => False::elim(ne(ord_equal_eq(k, k2, h))),
+      (h: Ord::compare(k, k2) = Greater) => Refl
+    )
+  }
+
+  pub theorem get_put<K, V>(
+    m: KeyMap(K, V),
+    k: K,
+    v: V
+  ): KeyMap::get(
+    KeyMap::put(m, k, v),
+    k
+  ) = Semilattice::merge(KeyMap::get(m, k), Some(v)) where Ord(K), Semilattice(V) {
+    Eq::trans(
+      KeyMap::get_merge(m, KeyMap::single(k, v), k),
+      Eq::congr(
+        (t: Option(V)) => Semilattice::merge(KeyMap::get(m, k), t),
+        KeyMap::get_single(k, v)
+      )
+    )
+  }
+
+  pub theorem get_put_other<K, V>(
+    m: KeyMap(K, V),
+    k: K,
+    v: V,
+    k2: K,
+    ne: (k = k2) -> False
+  ): KeyMap::get(KeyMap::put(m, k, v), k2) = KeyMap::get(m, k2) where Ord(K), Semilattice(V) {
+    Eq::trans(
+      KeyMap::get_merge(m, KeyMap::single(k, v), k2),
+      Eq::trans(
+        Eq::congr(
+          (t: Option(V)) => Semilattice::merge(KeyMap::get(m, k2), t),
+          KeyMap::get_single_other(k, v, k2, ne)
+        ),
+        option_merge_none_right(KeyMap::get(m, k2))
+      )
+    )
+  }
+}

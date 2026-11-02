@@ -1,0 +1,81 @@
+import "../src/GCounter.taut"
+import "../src/Semilattice.taut"
+import "../src/VClock.taut"
+import "../src/PNCounter.taut"
+import "../src/Register.taut"
+
+// Two replicas count apart, then exchange states in either order.
+def replica_a(): List(Nat) := GCounter::increment(GCounter::increment(Nil, Zero), Zero)
+
+def replica_b(): List(Nat) := GCounter::increment(Nil, Succ(Zero))
+
+theorem replicas_converge(): merge(replica_a(), replica_b()) = merge(replica_b(), replica_a()) {
+  merge_comm(replica_a(), replica_b())
+}
+
+theorem replicas_value(): GCounter::value(merge(replica_a(), replica_b())) = 3 {
+  Refl
+}
+
+// Three states received in two different orders give the same state.
+theorem replicas_any_order(
+  s: List(Nat),
+  x: List(Nat),
+  y: List(Nat),
+  z: List(Nat)
+): deliver(Cons(x, Cons(y, Cons(z, Nil))), s) = deliver(Cons(z, Cons(x, Cons(y, Nil))), s) {
+  deliver_perm(
+    Cons(x, Cons(y, Cons(z, Nil))),
+    Cons(z, Cons(x, Cons(y, Nil))),
+    PermTrans(
+      Cons(x, Cons(y, Cons(z, Nil))),
+      Cons(x, Cons(z, Cons(y, Nil))),
+      Cons(z, Cons(x, Cons(y, Nil))),
+      PermCons(x, Cons(y, Cons(z, Nil)), Cons(z, Cons(y, Nil)), PermSwap(y, z, Nil)),
+      PermSwap(x, z, Cons(y, Nil))
+    ),
+    s
+  )
+}
+
+// A counter that went up twice on one replica and down once on another.
+def counter(): List(Nat) × List(Nat) :=
+merge(
+  PNCounter::increment(PNCounter::increment(#(Nil, Nil), Zero), Zero),
+  PNCounter::decrement(#(Nil, Nil), Succ(Zero))
+)
+
+theorem counter_value(): PNCounter::value(counter()) = IntPos(1) {
+  Refl
+}
+
+// Two writes at time 1 and 2 merged in either order keep the later one.
+theorem register_later(): LwwRegister::get(
+  merge(LwwRegister::new(2, 20), LwwRegister::new(1, 10))
+) = 20 {
+  Refl
+}
+
+theorem register_later_other_order(): LwwRegister::get(
+  merge(LwwRegister::new(1, 10), LwwRegister::new(2, 20))
+) = 20 {
+  Refl
+}
+
+// Two writes at the same time: the larger value wins on every replica.
+theorem register_tie(): LwwRegister::get(merge(LwwRegister::new(1, 7), LwwRegister::new(1, 9))) = 9 {
+  Refl
+}
+
+// Vector clocks: a tick is after the old clock, two separate ticks are
+// concurrent.
+theorem clock_tick(): VClock::order(Cons(1, Nil), Cons(2, Nil)) = CausalityBefore {
+  Refl
+}
+
+theorem clock_concurrent(): VClock::order(
+  GCounter::increment(Nil, Zero),
+  GCounter::increment(Nil, Succ(Zero))
+) = CausalityConcurrent {
+  Refl
+}

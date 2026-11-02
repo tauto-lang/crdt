@@ -1,0 +1,130 @@
+import "Max.taut"
+import "Semilattice.taut"
+import std::prelude::Ord
+import std::Nat
+import "Instances.taut"
+
+// A grow-only counter: one count per replica, by replica index, merged
+// position by position with `max` (the `Semilattice(List(Nat))` instance).
+// A replica missing from the list has count zero.
+
+module GCounter {
+  // The counter's value: the sum of the counts.
+  pub fn value(a: List(Nat)): Nat {
+    match a: Nat {
+      Nil => Zero
+      Cons(x, xs) => x + GCounter::value(xs)
+    }
+  }
+
+  // The counter in which replica `i` has counted once and the others not at all.
+  pub fn single(i: Nat): List(Nat) {
+    match i: List(Nat) {
+      Zero => Cons(Succ(Zero), Nil)
+      Succ(j) => Cons(Zero, GCounter::single(j))
+    }
+  }
+
+  // Replica `i` counts one more.
+  pub fn increment(a: List(Nat), i: Nat): List(Nat) {
+    match a: List(Nat) {
+      Nil => GCounter::single(i)
+      Cons(x, xs) => match i: List(Nat) {
+        Zero => Cons(Succ(x), xs)
+        Succ(j) => Cons(x, GCounter::increment(xs, j))
+      }
+    }
+  }
+
+  // The delta of an increment: only the count that changed. Sending it
+  // instead of the whole state is enough (`GCounter::increment_delta_merge`).
+  pub fn increment_delta(a: List(Nat), i: Nat): List(Nat) {
+    match a: List(Nat) {
+      Nil => GCounter::single(i)
+      Cons(x, xs) => match i: List(Nat) {
+        Zero => Cons(Succ(x), Nil)
+        Succ(j) => Cons(Zero, GCounter::increment_delta(xs, j))
+      }
+    }
+  }
+}
+
+module Max {
+  theorem max_succ_self(x: Nat): Max::max(x, Succ(x)) = Succ(x) {
+    match x: Max::max(x, Succ(x)) = Succ(x) {
+      Zero => Refl
+      Succ(k) => Eq::congr(Succ, Max::max_succ_self(k))
+    }
+  }
+}
+
+module GCounter {
+  pub theorem increment_delta_merge(
+    a: List(Nat),
+    i: Nat
+  ): merge(a, GCounter::increment_delta(a, i)) = GCounter::increment(a, i) {
+    match a: merge(a, GCounter::increment_delta(a, i)) = GCounter::increment(a, i) {
+      Nil => Refl
+      Cons(x, xs) => match i: merge(
+        Cons(x, xs),
+        GCounter::increment_delta(Cons(x, xs), i)
+      ) = GCounter::increment(Cons(x, xs), i) {
+        Zero => List::cons_congr(
+          Max::max(x, Succ(x)),
+          Succ(x),
+          list_merge(xs, Nil),
+          xs,
+          Max::max_succ_self(x),
+          list_merge_nil_right(xs)
+        )
+        Succ(j) => List::cons_congr(
+          Max::max(x, Zero),
+          x,
+          merge(xs, GCounter::increment_delta(xs, j)),
+          GCounter::increment(xs, j),
+          Max::max_zero_right(x),
+          GCounter::increment_delta_merge(xs, j)
+        )
+      }
+    }
+  }
+
+  // An increment only moves the state up, so it never undoes what another
+  // replica has seen.
+  pub theorem increment_inflates(a: List(Nat), i: Nat): below(a, GCounter::increment(a, i)) {
+    Eq::subst(
+      List(Nat),
+      merge(a, GCounter::increment_delta(a, i)),
+      GCounter::increment(a, i),
+      (z: List(Nat)) => below(a, z),
+      GCounter::increment_delta_merge(a, i),
+      below_merge_left(a, GCounter::increment_delta(a, i))
+    )
+  }
+
+  theorem value_single(i: Nat): GCounter::value(GCounter::single(i)) = Succ(Zero) {
+    match i: GCounter::value(GCounter::single(i)) = Succ(Zero) {
+      Zero => Refl
+      Succ(j) => Eq::trans(
+        Nat::add_zero_left(GCounter::value(GCounter::single(j))),
+        GCounter::value_single(j)
+      )
+    }
+  }
+
+  // An increment adds one to the value.
+  pub theorem value_increment(
+    a: List(Nat),
+    i: Nat
+  ): GCounter::value(GCounter::increment(a, i)) = Succ(GCounter::value(a)) {
+    match a: GCounter::value(GCounter::increment(a, i)) = Succ(GCounter::value(a)) {
+      Nil => GCounter::value_single(i)
+      Cons(x, xs) => match i: GCounter::value(
+        GCounter::increment(Cons(x, xs), i)
+      ) = Succ(GCounter::value(Cons(x, xs))) {
+        Zero => Nat::add_succ_left(x, GCounter::value(xs))
+        Succ(j) => Eq::congr((v: Nat) => x + v, GCounter::value_increment(xs, j))
+      }
+    }
+  }
+}

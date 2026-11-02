@@ -1,0 +1,174 @@
+import std::Base
+import std::prelude::Ord
+import "Semilattice.taut"
+
+// The larger of two values in the order of `A`: `b` when `a` is below it.
+fn latest_pick<A>(o: Ordering, a: A, b: A): A {
+  match o: A {
+    Less => b
+    Equal => a
+    Greater => a
+  }
+}
+
+pub fn latest_of<A>(a: A, b: A): A where Ord(A) {
+  latest_pick(Ord::compare(&a, &b), a, b)
+}
+
+pub theorem latest_of_less<A>(
+  a: A,
+  b: A,
+  h: Ord::compare(a, b) = Less
+): latest_of(a, b) = b where Ord(A) {
+  Eq::congr((o: Ordering) => latest_pick(o, a, b), h)
+}
+
+theorem latest_of_greater<A>(
+  a: A,
+  b: A,
+  h: Ord::compare(a, b) = Greater
+): latest_of(a, b) = a where Ord(A) {
+  Eq::congr((o: Ordering) => latest_pick(o, a, b), h)
+}
+
+theorem latest_of_equal<A>(
+  a: A,
+  b: A,
+  h: Ord::compare(a, b) = Equal
+): latest_of(a, b) = a where Ord(A) {
+  Eq::congr((o: Ordering) => latest_pick(o, a, b), h)
+}
+
+theorem latest_of_same<A>(a: A): latest_of(a, a) = a where Ord(A) {
+  latest_of_equal(a, a, ord_eq_equal(a, a, Refl))
+}
+
+theorem latest_of_comm<A>(a: A, b: A): latest_of(a, b) = latest_of(b, a) where Ord(A) {
+  Ordering::cases(
+    (o: Ordering) => latest_pick(o, a, b) = latest_of(b, a),
+    Ord::compare(a, b),
+    (h: Ord::compare(a, b) = Less) => Eq::sym(latest_of_greater(b, a, ord_swap_less(a, b, h))),
+    (h: Ord::compare(a, b) = Equal) => Eq::subst(
+      A,
+      a,
+      b,
+      (z: A) => a = latest_of(z, a),
+      ord_equal_eq(a, b, h),
+      Eq::sym(latest_of_same(a))
+    ),
+    (h: Ord::compare(a, b) = Greater) => Eq::sym(latest_of_less(b, a, ord_swap_greater(a, b, h)))
+  )
+}
+
+theorem latest_of_absorb<A>(
+  a: A,
+  c: A
+): latest_of(a, latest_of(a, c)) = latest_of(a, c) where Ord(A) {
+  Ordering::cases(
+    (o: Ordering) => latest_of(a, latest_pick(o, a, c)) = latest_pick(o, a, c),
+    Ord::compare(a, c),
+    (h: Ord::compare(a, c) = Less) => latest_of_less(a, c, h),
+    (h: Ord::compare(a, c) = Equal) => latest_of_same(a),
+    (h: Ord::compare(a, c) = Greater) => latest_of_same(a)
+  )
+}
+
+theorem latest_of_assoc<A>(
+  a: A,
+  b: A,
+  c: A
+): latest_of(latest_of(a, b), c) = latest_of(a, latest_of(b, c)) where Ord(A) {
+  Ordering::cases(
+    (o: Ordering) => latest_of(latest_pick(o, a, b), c) = latest_of(a, latest_of(b, c)),
+    Ord::compare(a, b),
+    (hab: Ord::compare(a, b) = Less) => Ordering::cases(
+      (o: Ordering) => latest_pick(o, b, c) = latest_of(a, latest_pick(o, b, c)),
+      Ord::compare(b, c),
+      (hbc: Ord::compare(b, c) = Less) => Eq::sym(
+        latest_of_less(a, c, ord_trans(a, b, c, hab, hbc))
+      ),
+      (hbc: Ord::compare(b, c) = Equal) => Eq::sym(latest_of_less(a, b, hab)),
+      (hbc: Ord::compare(b, c) = Greater) => Eq::sym(latest_of_less(a, b, hab))
+    ),
+    (hab: Ord::compare(a, b) = Equal) => Eq::subst(
+      A,
+      a,
+      b,
+      (z: A) => latest_of(a, c) = latest_of(a, latest_of(z, c)),
+      ord_equal_eq(a, b, hab),
+      Eq::sym(latest_of_absorb(a, c))
+    ),
+    (hab: Ord::compare(a, b) = Greater) => Ordering::cases(
+      (o: Ordering) => latest_of(a, c) = latest_of(a, latest_pick(o, b, c)),
+      Ord::compare(b, c),
+      (hbc: Ord::compare(b, c) = Less) => Refl,
+      (hbc: Ord::compare(b, c) = Equal) => Eq::subst(
+        A,
+        b,
+        c,
+        (z: A) => latest_of(a, z) = latest_of(a, b),
+        ord_equal_eq(b, c, hbc),
+        Refl
+      ),
+      (hbc: Ord::compare(b, c) = Greater) => Eq::trans(
+        latest_of_greater(
+          a,
+          c,
+          ord_swap_less(
+            c,
+            a,
+            ord_trans(c, b, a, ord_swap_greater(b, c, hbc), ord_swap_greater(a, b, hab))
+          )
+        ),
+        Eq::sym(latest_of_greater(a, b, hab))
+      )
+    )
+  )
+}
+
+// A last-writer-wins register, or any value that only moves up a total
+// order: the merge keeps the larger. With `A = Nat × V` the first part
+// is the time of the write and the value breaks ties between writes made at
+// the same time.
+pub(open) inductive Latest(A: Type): Type {
+  Mk(a: A): Latest(A)
+}
+
+pub fn latest_new<A>(a: A): Latest(A) {
+  Mk(a)
+}
+
+pub fn latest_value<A>(r: Latest(A)): A {
+  match r: A {
+    Mk(a) => a
+  }
+}
+
+instance<A> Semilattice(Latest(A)) where Ord(A) {
+  fn merge(r: Latest(A), s: Latest(A)): Latest(A) {
+    Latest::Mk(latest_of(latest_value(r), latest_value(s)))
+  }
+  law comm<r: Latest(A), s: Latest(A)>(): Semilattice::merge(r, s) = Semilattice::merge(s, r) {
+    Eq::congr((a: A) => latest_new(a), latest_of_comm(latest_value(r), latest_value(s)))
+  }
+  law assoc<r: Latest(
+    A
+  ), s: Latest(
+    A
+  ), t: Latest(
+    A
+  )>(): Semilattice::merge(
+    Semilattice::merge(r, s),
+    t
+  ) = Semilattice::merge(r, Semilattice::merge(s, t)) {
+    Eq::congr(
+      (a: A) => latest_new(a),
+      latest_of_assoc(latest_value(r), latest_value(s), latest_value(t))
+    )
+  }
+  law idem<r: Latest(A)>(): Semilattice::merge(r, r) = r {
+    match r: Semilattice::merge(r, r) = r {
+      Mk(a) => Eq::congr((b: A) => latest_new(b), latest_of_same(a))
+    }
+  }
+}

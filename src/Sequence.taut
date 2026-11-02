@@ -1,0 +1,191 @@
+import "Instances.taut"
+import "KeyMap.taut"
+import "Semilattice.taut"
+import std::Base
+import std::prelude::Ord
+import "KeyMapSorted.taut"
+import "KeyMapFind.taut"
+import "Latest.taut"
+import "Sets.taut"
+
+// A sequence (a list edited concurrently, like text). Each element sits at
+// a position (`Position.taut`) and the elements are read in the order of
+// their positions. An element is its value and a flag that is raised when
+// it is deleted; a delete does not need the value, so it is a delta of its
+// own. Inserting between two elements takes a position between theirs
+// (`Position::between`), so the new element is read between them.
+//
+// The value type needs an order only so that the value is a semilattice
+// (`Latest`); two states never hold different values at one position, since
+// positions carry the dot of the insert that made them.
+
+module Sequence {
+  pub fn insert<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat),
+    v: T
+  ): KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool) where Ord(T) {
+    KeyMap::put(s, at, #(Some(Latest::Mk(v)), false))
+  }
+
+  pub fn delete<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat)
+  ): KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool) where Ord(T) {
+    KeyMap::put(s, at, #(None, true))
+  }
+
+  fn read_entry<T>(o: Option(Latest(T)), f: Bool, rest: List(T)): List(T) {
+    match o: List(T) {
+      None => rest
+      Some(l) => match f: List(T) {
+        false => Cons(latest_value(l), rest)
+        true => rest
+      }
+    }
+  }
+
+  fn read_list<T>(es: List(List(Nat × Nat × Nat) × Option(Latest(T)) × Bool)): List(T) {
+    match es: List(T) {
+      Nil => Nil
+      Cons(e, rest) => match e: List(T) {
+        #(k, p) => match p: List(T) {
+          #(o, f) => Sequence::read_entry(o, f, Sequence::read_list(rest))
+        }
+      }
+    }
+  }
+
+  // The values that are not deleted, in the order of their positions.
+  pub fn read<T>(s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool)): List(T) {
+    Sequence::read_list(KeyMap::entries(s))
+  }
+
+  fn deleted_flag<T>(o: Option(Option(Latest(T)) × Bool)): Bool {
+    match o: Bool {
+      None => false
+      Some(p) => match p: Bool {
+        #(v, f) => f
+      }
+    }
+  }
+
+  // Whether the element at `at` has been deleted.
+  fn is_deleted<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat)
+  ): Bool where Ord(T) {
+    Sequence::deleted_flag(KeyMap::get(s, at))
+  }
+
+  theorem deleted_flag_merge<T>(
+    o1: Option(Option(Latest(T)) × Bool),
+    o2: Option(Option(Latest(T)) × Bool)
+  ): Sequence::deleted_flag(
+    merge(o1, o2)
+  ) = Bool::or(Sequence::deleted_flag(o1), Sequence::deleted_flag(o2)) where Ord(T) {
+    match o1: Sequence::deleted_flag(
+      merge(o1, o2)
+    ) = Bool::or(Sequence::deleted_flag(o1), Sequence::deleted_flag(o2)) {
+      None => Refl
+      Some(p) => match p: Sequence::deleted_flag(
+        merge(Some(p), o2)
+      ) = Bool::or(Sequence::deleted_flag(Some(p)), Sequence::deleted_flag(o2)) {
+        #(v, f) => match o2: Sequence::deleted_flag(
+          merge(Some(#(v, f)), o2)
+        ) = Bool::or(f, Sequence::deleted_flag(o2)) {
+          None => Eq::sym(bool_or_false_right(f))
+          Some(q) => match q: Sequence::deleted_flag(
+            merge(Some(#(v, f)), Some(q))
+          ) = Bool::or(f, Sequence::deleted_flag(Some(q))) {
+            #(v2, f2) => Refl
+          }
+        }
+      }
+    }
+  }
+
+  theorem delete_deleted<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat)
+  ): Sequence::is_deleted(Sequence::delete(s, at), at) = true where Ord(T) {
+    Eq::trans(
+      Eq::congr(
+        (o: Option(Option(Latest(T)) × Bool)) => Sequence::deleted_flag(o),
+        KeyMap::get_put(s, at, #(None, true))
+      ),
+      Eq::trans(
+        Sequence::deleted_flag_merge(
+          KeyMap::get(s, at),
+          Some(#(the(Option(Latest(T)), None), true))
+        ),
+        bool_or_true_right(Sequence::deleted_flag(KeyMap::get(s, at)))
+      )
+    )
+  }
+
+  // A deleted element stays deleted in every state the delete reaches.
+  theorem delete_merge<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    t: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat)
+  ): Sequence::is_deleted(merge(Sequence::delete(s, at), t), at) = true where Ord(T) {
+    Eq::trans(
+      Eq::congr(
+        (o: Option(Option(Latest(T)) × Bool)) => Sequence::deleted_flag(o),
+        KeyMap::get_merge(Sequence::delete(s, at), t, at)
+      ),
+      Eq::trans(
+        Sequence::deleted_flag_merge(KeyMap::get(Sequence::delete(s, at), at), KeyMap::get(t, at)),
+        Eq::congr(
+          (b: Bool) => Bool::or(b, Sequence::is_deleted(t, at)),
+          Sequence::delete_deleted(s, at)
+        )
+      )
+    )
+  }
+
+  // Inserting at a new position puts the value there, not deleted.
+  theorem insert_get<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat),
+    v: T,
+    fresh: KeyMap::get(s, at) = None
+  ): KeyMap::get(Sequence::insert(s, at, v), at) = Some(#(Some(Latest::Mk(v)), false)) where Ord(T) {
+    Eq::trans(
+      KeyMap::get_put(s, at, #(Some(Latest::Mk(v)), false)),
+      Eq::congr(
+        (o: Option(Option(Latest(T)) × Bool)) => merge(o, Some(#(Some(Latest::Mk(v)), false))),
+        fresh
+      )
+    )
+  }
+
+  // Inserts, deletes and merges keep the positions sorted, so a read lists
+  // the values in the order of their positions.
+  theorem insert_sorted<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat),
+    v: T,
+    h: KeyMap::sorted(KeyMap::entries(s))
+  ): KeyMap::sorted(KeyMap::entries(Sequence::insert(s, at, v))) where Ord(T) {
+    KeyMap::sorted_put(s, at, #(Some(Latest::Mk(v)), false), h)
+  }
+
+  theorem delete_sorted<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    at: List(Nat × Nat × Nat),
+    h: KeyMap::sorted(KeyMap::entries(s))
+  ): KeyMap::sorted(KeyMap::entries(Sequence::delete(s, at))) where Ord(T) {
+    KeyMap::sorted_put(s, at, #(the(Option(Latest(T)), None), true), h)
+  }
+
+  theorem merge_sorted<T>(
+    s: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    t: KeyMap(List(Nat × Nat × Nat), Option(Latest(T)) × Bool),
+    h1: KeyMap::sorted(KeyMap::entries(s)),
+    h2: KeyMap::sorted(KeyMap::entries(t))
+  ): KeyMap::sorted(KeyMap::entries(merge(s, t))) where Ord(T) {
+    KeyMap::sorted_merge(KeyMap::entries(s), KeyMap::entries(t), h1, h2)
+  }
+}

@@ -1,0 +1,320 @@
+import "GCounter.taut"
+import "Max.taut"
+import "Semilattice.taut"
+import std::Base
+import std::Nat
+import std::prelude::Ord
+import "ORSet.taut"
+
+// Vector clocks: one count per replica, merged with `max` position by
+// position (the `List(Nat)` instance), so `below` is the happened-before
+// order. A replica ticks its own count with `GCounter::increment`.
+
+module VClock {
+  // Whether `a` is below `b`, decided position by position.
+  fn leq(a: List(Nat), b: List(Nat)): Bool {
+    match a: Bool {
+      Nil => true
+      Cons(x, xs) => match b: Bool {
+        Nil => false
+        Cons(y, ys) => Bool::and(Nat::le(x, y), VClock::leq(xs, ys))
+      }
+    }
+  }
+}
+
+theorem nat_le_crdt_max(x: Nat, y: Nat, h: Nat::lt(x, Succ(y)) = true): Max::max(x, y) = y {
+  match x: Max::max(x, y) = y {
+    Zero => Refl
+    Succ(x2) => match y: Max::max(Succ(x2), y) = y {
+      Zero => False::elim(false_ne_true(Eq::trans(Eq::sym(Nat::lt_zero_false(x2)), h)))
+      Succ(y2) => Eq::congr(Succ, nat_le_crdt_max(x2, y2, h))
+    }
+  }
+}
+
+module VClock {
+  theorem leq_below(a: List(Nat), b: List(Nat), h: VClock::leq(a, b) = true): below(a, b) {
+    match a: below(a, b) {
+      Nil => Refl
+      Cons(x, xs) => match b: below(Cons(x, xs), b) {
+        Nil => False::elim(false_ne_true(h))
+        Cons(y, ys) => List::cons_congr(
+          Max::max(x, y),
+          y,
+          merge(xs, ys),
+          ys,
+          nat_le_crdt_max(x, y, And::left(Bool::and_split(Nat::le(x, y), VClock::leq(xs, ys), h))),
+          VClock::leq_below(
+            xs,
+            ys,
+            And::right(Bool::and_split(Nat::le(x, y), VClock::leq(xs, ys), h))
+          )
+        )
+      }
+    }
+  }
+}
+
+theorem below_vclock_leq(a: List(Nat), b: List(Nat), h: below(a, b)): VClock::leq(a, b) = true {
+  match a: VClock::leq(a, b) = true {
+    Nil => Refl
+    Cons(x, xs) => match b: VClock::leq(Cons(x, xs), b) = true {
+      Nil => False::elim(List::cons_ne_nil(x, xs, h))
+      Cons(y, ys) => Bool::and_intro(
+        Nat::le(x, y),
+        VClock::leq(xs, ys),
+        Max::max_below_lt(x, y, And::left(List::cons_inj(Max::max(x, y), y, merge(xs, ys), ys, h))),
+        below_vclock_leq(
+          xs,
+          ys,
+          And::right(List::cons_inj(Max::max(x, y), y, merge(xs, ys), ys, h))
+        )
+      )
+    }
+  }
+}
+
+// How two clocks are related.
+pub(open) inductive Causality: Type {
+  CausalitySame: Causality
+  CausalityBefore: Causality
+  CausalityAfter: Causality
+  CausalityConcurrent: Causality
+}
+
+fn causality_of(ab: Bool, ba: Bool): Causality {
+  match ab: Causality {
+    true => match ba: Causality {
+      true => CausalitySame
+      false => CausalityBefore
+    }
+    false => match ba: Causality {
+      true => CausalityAfter
+      false => CausalityConcurrent
+    }
+  }
+}
+
+module VClock {
+  pub fn order(a: List(Nat), b: List(Nat)): Causality {
+    causality_of(VClock::leq(a, b), VClock::leq(b, a))
+  }
+
+  theorem not_below(
+    a: List(Nat),
+    b: List(Nat),
+    h: VClock::leq(a, b) = false
+  ): (below(a, b)) -> False {
+    (e: below(a, b)) => false_ne_true(Eq::trans(Eq::sym(h), below_vclock_leq(a, b, e)))
+  }
+}
+
+theorem causality_of_same(
+  p: Bool,
+  q: Bool,
+  e: causality_of(p, q) = CausalitySame
+): (p = true) ∧ (q = true) {
+  match p: (p = true) ∧ (q = true) {
+    false => match q: (false = true) ∧ (q = true) {
+      false => match e: (false = true) ∧ (false = true) {
+      }
+      true => match e: (false = true) ∧ (true = true) {
+      }
+    }
+    true => match q: (true = true) ∧ (q = true) {
+      false => match e: (true = true) ∧ (false = true) {
+      }
+      true => AndIntro(Refl, Refl)
+    }
+  }
+}
+
+theorem causality_of_before(
+  p: Bool,
+  q: Bool,
+  e: causality_of(p, q) = CausalityBefore
+): (p = true) ∧ (q = false) {
+  match p: (p = true) ∧ (q = false) {
+    false => match q: (false = true) ∧ (q = false) {
+      false => match e: (false = true) ∧ (false = false) {
+      }
+      true => match e: (false = true) ∧ (true = false) {
+      }
+    }
+    true => match q: (true = true) ∧ (q = false) {
+      false => AndIntro(Refl, Refl)
+      true => match e: (true = true) ∧ (true = false) {
+      }
+    }
+  }
+}
+
+theorem causality_of_after(
+  p: Bool,
+  q: Bool,
+  e: causality_of(p, q) = CausalityAfter
+): (p = false) ∧ (q = true) {
+  match p: (p = false) ∧ (q = true) {
+    false => match q: (false = false) ∧ (q = true) {
+      false => match e: (false = false) ∧ (false = true) {
+      }
+      true => AndIntro(Refl, Refl)
+    }
+    true => match q: (true = false) ∧ (q = true) {
+      false => match e: (true = false) ∧ (false = true) {
+      }
+      true => match e: (true = false) ∧ (true = true) {
+      }
+    }
+  }
+}
+
+theorem causality_of_concurrent(
+  p: Bool,
+  q: Bool,
+  e: causality_of(p, q) = CausalityConcurrent
+): (p = false) ∧ (q = false) {
+  match p: (p = false) ∧ (q = false) {
+    false => match q: (false = false) ∧ (q = false) {
+      false => AndIntro(Refl, Refl)
+      true => match e: (false = false) ∧ (true = false) {
+      }
+    }
+    true => match q: (true = false) ∧ (q = false) {
+      false => match e: (true = false) ∧ (false = false) {
+      }
+      true => match e: (true = false) ∧ (true = false) {
+      }
+    }
+  }
+}
+
+module VClock {
+  // `same`: the clocks are equal.
+  theorem order_same(a: List(Nat), b: List(Nat), h: VClock::order(a, b) = CausalitySame): a = b {
+    below_antisym(
+      a,
+      b,
+      VClock::leq_below(
+        a,
+        b,
+        And::left(causality_of_same(VClock::leq(a, b), VClock::leq(b, a), h))
+      ),
+      VClock::leq_below(
+        b,
+        a,
+        And::right(causality_of_same(VClock::leq(a, b), VClock::leq(b, a), h))
+      )
+    )
+  }
+
+  // `before`: `a` happened before `b`.
+  theorem order_before(
+    a: List(Nat),
+    b: List(Nat),
+    h: VClock::order(a, b) = CausalityBefore
+  ): below(a, b) ∧ ((below(b, a)) -> False) {
+    AndIntro(
+      VClock::leq_below(
+        a,
+        b,
+        And::left(causality_of_before(VClock::leq(a, b), VClock::leq(b, a), h))
+      ),
+      VClock::not_below(
+        b,
+        a,
+        And::right(causality_of_before(VClock::leq(a, b), VClock::leq(b, a), h))
+      )
+    )
+  }
+
+  // `after`: `b` happened before `a`.
+  theorem order_after(
+    a: List(Nat),
+    b: List(Nat),
+    h: VClock::order(a, b) = CausalityAfter
+  ): ((below(a, b)) -> False) ∧ below(b, a) {
+    AndIntro(
+      VClock::not_below(
+        a,
+        b,
+        And::left(causality_of_after(VClock::leq(a, b), VClock::leq(b, a), h))
+      ),
+      VClock::leq_below(
+        b,
+        a,
+        And::right(causality_of_after(VClock::leq(a, b), VClock::leq(b, a), h))
+      )
+    )
+  }
+
+  // `concurrent`: neither saw the other.
+  theorem order_concurrent(
+    a: List(Nat),
+    b: List(Nat),
+    h: VClock::order(a, b) = CausalityConcurrent
+  ): ((below(a, b)) -> False) ∧ ((below(b, a)) -> False) {
+    AndIntro(
+      VClock::not_below(
+        a,
+        b,
+        And::left(causality_of_concurrent(VClock::leq(a, b), VClock::leq(b, a), h))
+      ),
+      VClock::not_below(
+        b,
+        a,
+        And::right(causality_of_concurrent(VClock::leq(a, b), VClock::leq(b, a), h))
+      )
+    )
+  }
+}
+
+theorem nat_succ_ne_self(n: Nat, e: Succ(n) = n): False {
+  match n: False {
+    Zero => succ_ne_zero(Zero, e)
+    Succ(k) => nat_succ_ne_self(k, Eq::congr(Nat::pred, e))
+  }
+}
+
+module VClock {
+  // A tick moves the clock strictly forward.
+  theorem tick_not_back(a: List(Nat), r: Nat): VClock::leq(GCounter::increment(a, r), a) = false {
+    match VClock::leq(
+      GCounter::increment(a, r),
+      a
+    ) eqn h: VClock::leq(GCounter::increment(a, r), a) = false {
+      false => Refl
+      true => False::elim(
+        nat_succ_ne_self(
+          GCounter::value(a),
+          Eq::trans(
+            Eq::sym(GCounter::value_increment(a, r)),
+            Eq::congr(
+              GCounter::value,
+              below_antisym(
+                GCounter::increment(a, r),
+                a,
+                VClock::leq_below(GCounter::increment(a, r), a, h),
+                GCounter::increment_inflates(a, r)
+              )
+            )
+          )
+        )
+      )
+    }
+  }
+
+  theorem tick_after(
+    a: List(Nat),
+    r: Nat
+  ): VClock::order(a, GCounter::increment(a, r)) = CausalityBefore {
+    Eq::trans(
+      Eq::congr(
+        (p: Bool) => causality_of(p, VClock::leq(GCounter::increment(a, r), a)),
+        below_vclock_leq(a, GCounter::increment(a, r), GCounter::increment_inflates(a, r))
+      ),
+      Eq::congr((q: Bool) => causality_of(true, q), VClock::tick_not_back(a, r))
+    )
+  }
+}
